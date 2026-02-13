@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from typing import Any, Dict
+from src.housing_agent.normalize.common import make_seq_id
 
+def normalize_housing_supply(item: Dict[str, Any], seq_idx: int | None = None) -> Dict[str, Any]:
 
-def normalize_housing_supply(item: Dict[str, Any]) -> Dict[str, Any]:
-
-    policy_id = str(item["policy_id"]).strip()
+    policy_id = make_seq_id("SUP", seq_idx) if seq_idx is not None else str(item["policy_id"]).strip()
     title = (item.get("title") or "").strip()
 
     target_text = (item.get("target_text") or "").strip()

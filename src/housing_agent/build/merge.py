@@ -67,13 +67,23 @@ def main() -> None:
     cost_raw = load_json(DATA_RAW / FILES["housing_cost_etc"])
     dorm_raw = load_json(DATA_RAW / FILES["dormitory"])
 
+    # 데이터 정렬 고정
+    finance_raw = sorted(finance_raw, key=lambda x: x.get("policy_name", ""))
+    supply_raw = sorted(supply_raw, key=lambda x: x.get("policy_name", ""))
+    cost_raw = sorted(cost_raw, key=lambda x: x.get("policy_title", ""))
+
     # 각 카테고리 별로 데이터 정규화
     normalized: List[Dict[str, Any]] = []
-    normalized += [normalize_finance(x) for x in finance_raw]
-    normalized += [normalize_housing_supply(x) for x in supply_raw]
-    normalized += [normalize_housing_cost_etc(x) for x in cost_raw]
 
-    # 기숙사 데이터는 그룹핑 먼저 진행
+    normalized += [normalize_finance(x) for x in finance_raw]
+    normalized += [
+        normalize_housing_supply(x, idx)
+        for idx, x in enumerate(supply_raw, start=1)
+    ]
+    normalized += [
+        normalize_housing_cost_etc(x, idx)
+        for idx, x in enumerate(cost_raw, start=1)
+    ]
     normalized += normalize_dormitory(dorm_raw)
 
     # 최소 검증

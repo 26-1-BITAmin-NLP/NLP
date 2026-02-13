@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
-from src.housing_agent.normalize.common import stable_id, norm_keep_lines, dedup_texts, wrap_long_lines
+from src.housing_agent.normalize.common import make_seq_id, norm_keep_lines, dedup_texts, wrap_long_lines
 
 # 기숙사 별로 그룹핑
 def _group_key(item: Dict[str, Any]) -> Tuple[str, str]:
@@ -31,7 +31,7 @@ def _bucket_from_tokens(tokens: List[str]) -> str:
     return "other"
 
 
-def normalize_dormitory_group(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+def normalize_dormitory_group(items: List[Dict[str, Any]], seq_idx: int) -> Dict[str, Any]:
     base = items[0]
     dorm_name = (base.get("dorm_name") or "").strip()
     category = (base.get("category") or "").strip()
@@ -118,7 +118,7 @@ def normalize_dormitory_group(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     raw_text = "\n".join([p for p in parts if p is not None]).strip()
     raw_text = wrap_long_lines(raw_text, max_line_len=110)
 
-    policy_id = stable_id("DORM", {"dorm_name": dorm_name, "source_url": source_url})
+    policy_id = make_seq_id("DORM", seq_idx)
 
     return {
         "policy_id": policy_id,
@@ -143,4 +143,8 @@ def normalize_dormitory(all_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
     for it in all_items:
         groups.setdefault(_group_key(it), []).append(it)
-    return [normalize_dormitory_group(items) for items in groups.values()]
+
+    # 인덱스 순서 고정
+    grouped_items = [groups[k] for k in sorted(groups.keys(), key=lambda x: (x[0], x[1]))]
+
+    return [normalize_dormitory_group(items, idx) for idx, items in enumerate(grouped_items, start=1)]

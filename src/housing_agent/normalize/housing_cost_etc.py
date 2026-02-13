@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 from src.housing_agent.normalize.common import (
-    stable_id, norm_keep_lines, dedup_texts, join_lines, wrap_long_lines
+    make_seq_id, norm_keep_lines, dedup_texts, join_lines, wrap_long_lines
 )
 
 # table을 line으로 변환
@@ -35,11 +35,11 @@ def _section_map(title: str) -> str:
     return "other"
 
 
-def normalize_housing_cost_etc(item: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_housing_cost_etc(item: Dict[str, Any], seq_idx: int) -> Dict[str, Any]:
     title = norm_keep_lines(item.get("policy_title") or "")
     sections_in = item.get("sections") or []
 
-    policy_id = stable_id("COST", {"policy_title": title, "sections": sections_in})
+    policy_id = make_seq_id("COST", seq_idx)
 
     target_texts: List[str] = []
     condition_texts: List[str] = []

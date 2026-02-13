@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List
-import hashlib
-import json
+# import hashlib
+# import json
 import re
 
-# policy_id 생성 (주거비/기타 지원, 기숙사)
-def stable_id(prefix: str, payload: Dict[str, Any]) -> str:
+# 해시 함수
+""" def stable_id(prefix: str, payload: Dict[str, Any]) -> str:
     s = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     h = hashlib.md5(s.encode("utf-8")).hexdigest()[:10]
-    return f"{prefix}_{h}"
+    return f"{prefix}_{h}" """
+
+# 정책 id 생성 방안 수정
+def make_seq_id(prefix: str, idx: int) -> str:
+    return f"{prefix}_{idx:03d}"
 
 # 줄바꿈 및 공백 제거
 def norm_keep_lines(s: str) -> str:
