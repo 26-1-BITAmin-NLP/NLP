@@ -10,7 +10,13 @@ INPUT_PATH = "data/processed/policies.json"
 OUTPUT_PATH = "data/processed/policies_chunking.jsonl"
 
 MAX_CHARS = 1100        # chunk 최대 길이
-OVERLAP = 160           # chunk 오버랩
+OVERLAP = 160           # chunk 오버랩 (긴 텍스트 자를 때 사용)
+
+MIN_CHARS = 300         # 너무 짧은 chunk는 병합 (최적화)
+MIN_KEEP = 120          # 마지막 청크가 120보다 짧으면 이전 chunk에 붙임
+
+MIN_POLICY_CHUNK = 250  # (정책 전체) 너무 짧은 chunk는 이전 chunk에 병합
+DROP_UNDER = 40         # 40보다 짧은 길이는 노이즈로 생각하고 버림
 
 # 청킹 데이터 섹션 설정
 SECTION_ORDER: List[Tuple[str, str]] = [
@@ -54,7 +60,7 @@ def _meta_block(p: Dict[str, Any]) -> str:
         lines.append(f"링크: {p['source_url']}")
     return _norm_lines("\n".join(lines))
 
-# 긴 텍스트 나누기
+# 긴 텍스트 분할
 def _split_with_overlap(text: str, max_chars: int, overlap: int) -> List[str]:
 
     text = _norm_lines(text)
@@ -64,7 +70,7 @@ def _split_with_overlap(text: str, max_chars: int, overlap: int) -> List[str]:
     if len(text) <= max_chars:
         return [text]
 
-    # 1) 문단 단위
+    # 문단 단위
     paras = [p.strip() for p in text.split("\n\n") if p.strip()]
     chunks: List[str] = []
     buf = ""
@@ -82,6 +88,7 @@ def _split_with_overlap(text: str, max_chars: int, overlap: int) -> List[str]:
         else:
             flush()
 
+            # 문단이 너무 길면 줄 단위로 분할
             if len(para) > max_chars:
                 lines = [ln for ln in para.split("\n") if ln.strip()]
                 b = ""
@@ -99,6 +106,7 @@ def _split_with_overlap(text: str, max_chars: int, overlap: int) -> List[str]:
                 buf = para
     flush()
 
+    # max_chars를 넘는 청크가 있으면 글자 단위로 분할, overlap
     final: List[str] = []
     for c in chunks:
         if len(c) <= max_chars:
@@ -116,7 +124,39 @@ def _split_with_overlap(text: str, max_chars: int, overlap: int) -> List[str]:
 
     return final
 
-# 결과 리스트 반환
+# 청킹 최적화 (짧은 조각 chunk 병합)
+def _merge_short_pieces(pieces: List[str], min_chars: int, min_keep: int) -> List[str]:
+    pieces = [p for p in (pieces or []) if _norm_lines(p)]
+    if not pieces:
+        return []
+
+    merged: List[str] = []
+    buf = ""
+
+    for p in pieces:
+        p = _norm_lines(p)
+        if not buf:
+            buf = p
+            continue
+
+        # buf가 짧으면 계속 붙임
+        if len(buf) < min_chars:
+            buf = buf + "\n\n" + p
+        else:
+            merged.append(buf)
+            buf = p
+
+    if buf:
+        merged.append(buf)
+
+    # 마지막 조각이 너무 짧으면 이전 청크에 붙임
+    if len(merged) >= 2 and len(merged[-1]) < min_keep:
+        merged[-2] = _norm_lines(merged[-2] + "\n\n" + merged[-1])
+        merged.pop()
+
+    return merged
+
+# raw_text 보완 시 기존 섹션들과의 중복 엄격하게 체크
 def _build_blocks(p: Dict[str, Any]) -> List[Tuple[str, str]]:
     blocks: List[Tuple[str, str]] = []
 
@@ -124,6 +164,7 @@ def _build_blocks(p: Dict[str, Any]) -> List[Tuple[str, str]]:
     if meta:
         blocks.append(("META", meta))
 
+    existing_content = meta
     non_empty_fields = 0
 
     for key, sec in SECTION_ORDER[1:]:
@@ -131,23 +172,74 @@ def _build_blocks(p: Dict[str, Any]) -> List[Tuple[str, str]]:
         if txt:
             non_empty_fields += 1
             blocks.append((sec, txt))
+            existing_content += "\n" + txt
 
-    # 필드가 거의 비어있으면 raw_text로 보완
+    # 필드가 너무 적을 때만 raw_text를 참고, 기존 내용과 겹치면 제외
     if non_empty_fields <= 1:
         raw = _norm_lines(p.get("raw_text") or "")
-        if raw:
-            blocks.append(("EXTRA", raw))
-
+        if raw and len(raw) > len(existing_content):
+            # 메타데이터의 내용이 raw_text 시작 부분에 있다면 제거
+            raw = _strip_meta_prefix_from_raw(raw, meta)
+            if raw and len(raw) > 50: # 의미 있는 길일 때만 추가
+                 blocks.append(("EXTRA", raw))
     return blocks
+
+# 아주 짧은 청크 처리 (최적화)
+def _policy_level_merge(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not chunks:
+        return []
+    
+    out: List[Dict[str, Any]] = []
+    
+    for c in chunks:
+        text = _norm_lines(c.get("text") or "")
+        if len(text) < DROP_UNDER:
+            continue
+
+        if not out:
+            out.append(c)
+            continue
+
+        # 이전 청크와 섹션이 같고, 현재 텍스트가 너무 짧을 때만 합침
+        if out[-1]["section"] == c["section"] and len(text) < MIN_POLICY_CHUNK:
+            out[-1]["text"] = _norm_lines(out[-1]["text"] + "\n\n" + text)
+        else:
+            out.append(c)
+
+    return out
+
+# metadata 중복 제거
+def _strip_meta_prefix_from_raw(raw_text: str, meta_text: str) -> str:
+
+    raw = _norm_lines(raw_text)
+    meta = _norm_lines(meta_text)
+    if not raw or not meta:
+        return raw
+
+    # raw_text가 meta로 시작하면 그 부분 제거
+    if raw.startswith(meta):
+        raw = _norm_lines(raw[len(meta):])
+        return raw.lstrip("\n").strip()
+
+    return raw
 
 def chunk_policy(p: Dict[str, Any]) -> List[Dict[str, Any]]:
     blocks = _build_blocks(p)
-
     chunks: List[Dict[str, Any]] = []
     idx = 0
+
     for section, block_text in blocks:
-        pieces = _split_with_overlap(block_text, MAX_CHARS, OVERLAP)
+        # meta 데이터 쪼개지 않기
+        if section == "META":
+            pieces = [_norm_lines(block_text)] if _norm_lines(block_text) else []
+        else:
+            pieces = _split_with_overlap(block_text, MAX_CHARS, OVERLAP)
+            pieces = _merge_short_pieces(pieces, MIN_CHARS, MIN_KEEP)
+
         for piece in pieces:
+            piece = _norm_lines(piece)
+            if not piece:
+                continue
             chunks.append({
                 "chunk_id": f"{p['policy_id']}#{idx:03d}",
                 "policy_id": p["policy_id"],
@@ -155,9 +247,15 @@ def chunk_policy(p: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "title": p.get("title"),
                 "section": section,
                 "text": piece,
-                "source_url": p.get("source_url"),
+                # "source_url": p.get("source_url"),
             })
             idx += 1
+
+    chunks = _policy_level_merge(chunks)
+
+    for new_i, c in enumerate(chunks):
+        c["chunk_id"] = f"{p['policy_id']}#{new_i:03d}"
+
     return chunks
 
 def main():
