@@ -1,4 +1,4 @@
-# dormitory.py (핵심 로직 교체 버전)
+# 기숙사 정책 데이터 정규화 코드
 from __future__ import annotations
 
 import re
@@ -8,15 +8,10 @@ from src.housing_agent.normalize.common import (
     make_seq_id, norm_keep_lines, dedup_texts, wrap_long_lines
 )
 
-# -----------------------
-# grouping
-# -----------------------
+
 def _group_key(item: Dict[str, Any]) -> Tuple[str, str]:
     return (item.get("dorm_name") or "").strip(), (item.get("source_url") or "").strip()
 
-# -----------------------
-# guide_section token fallback
-# -----------------------
 TOKEN_RE = re.compile(r"[A-Za-z_]+")
 
 def _section_tokens(section: str) -> List[str]:
@@ -24,11 +19,7 @@ def _section_tokens(section: str) -> List[str]:
     return TOKEN_RE.findall(s)
 
 def _fallback_bucket_from_tokens(tokens: List[str]) -> Optional[str]:
-    """
-    원본 guide_section 토큰 기반 fallback.
-    (한 줄은 한 bucket만)
-    우선순위: apply > condition > target > benefit
-    """
+
     t = set(tokens)
     if "schedule" in t:
         return "apply"
@@ -40,9 +31,7 @@ def _fallback_bucket_from_tokens(tokens: List[str]) -> Optional[str]:
         return "benefit"
     return None
 
-# -----------------------
-# 헤더(소제목) 기반 정확 분리
-# -----------------------
+
 HEADER_TO_BUCKET = {
     # target(대상/자격)
     "입사자격": "target",
@@ -85,17 +74,17 @@ HEADER_TO_BUCKET = {
     "납부": "benefit",
 }
 
-# “헤더 라인” 판별 강화: 너무 긴 줄은 헤더로 보지 않음
+# 헤더 라인 판별 강화
 def _as_header(line: str) -> Optional[str]:
     s = (line or "").strip()
     if not s:
         return None
-    if len(s) > 25:  # 헤더는 보통 짧음
+    if len(s) > 25: 
         return None
-    # 정확 매칭 우선
+
     if s in HEADER_TO_BUCKET:
         return s
-    # 약한 매칭: "선발기준", "신청기간" 같은 단어로 시작
+
     for h in HEADER_TO_BUCKET.keys():
         if s.startswith(h):
             return h
@@ -106,9 +95,9 @@ def _is_contact_line(line: str) -> bool:
     return any(k in s for k in ["문의", "연락", "전화", "담당", "TEL", "Tel", "☎", "콜센터"])
 
 def _split_lines(text: str) -> List[str]:
-    # 원본은 줄바꿈 기반 구조가 강해서 줄 단위가 제일 안전
+ 
     lines = [ln.strip() for ln in (text or "").split("\n") if ln.strip()]
-    # 숫자/불릿 제거는 최소만
+
     cleaned = []
     for ln in lines:
         cleaned.append(re.sub(r"^\s*([\-•*]|[0-9]+\.)\s*", "", ln).strip())
@@ -118,12 +107,7 @@ def _route_guide_text(
     guide_text: str,
     guide_section: str
 ) -> Dict[str, List[str]]:
-    """
-    핵심:
-    - 헤더로 문단을 먼저 분리해서 bucket을 '정확히' 결정
-    - 헤더를 못 잡는 라인은 guide_section 토큰으로 fallback
-    - 한 줄은 한 bucket만(중복 방지)
-    """
+
     tokens = _section_tokens(guide_section)
     fallback = _fallback_bucket_from_tokens(tokens)
 
@@ -132,35 +116,33 @@ def _route_guide_text(
     current_bucket: Optional[str] = None  # 헤더로 정해진 bucket
 
     for line in _split_lines(guide_text):
-        # contact는 별도 분리(스키마와 독립)
+        # contact는 별도 분리
         if _is_contact_line(line):
             out["contact"].append(line)
 
         header = _as_header(line)
         if header:
             current_bucket = HEADER_TO_BUCKET[header]
-            # 헤더 자체도 해당 bucket에 넣어주면 구조가 선명해짐(원하면 제거 가능)
+
             out[current_bucket].append(header)
             continue
 
-        # 헤더로 bucket이 결정되어 있으면 그걸 최우선
+
         if current_bucket:
             out[current_bucket].append(line)
         else:
-            # 헤더가 없으면 guide_section 기반으로만 보냄(중복 방지)
+
             if fallback:
                 out[fallback].append(line)
             else:
                 out["other"].append(line)
 
-    # 버킷별 내부 중복 제거
+
     for k in out.keys():
         out[k] = dedup_texts(out[k])
     return out
 
-# -----------------------
-# 숫자 처리(0 -> None)
-# -----------------------
+
 def _pick_num(items: List[Dict[str, Any]], key: str):
     for it in items:
         v = it.get(key)
@@ -170,16 +152,13 @@ def _pick_num(items: List[Dict[str, Any]], key: str):
     v = items[0].get(key)
     return None if v in (None, "", 0) else v
 
-# -----------------------
-# normalize
-# -----------------------
+
 def normalize_dormitory_group(items: List[Dict[str, Any]], seq_idx: int) -> Dict[str, Any]:
     base = items[0]
     dorm_name = (base.get("dorm_name") or "").strip()
     category = (base.get("category") or "").strip()
     source_url = base.get("source_url") or None
 
-    # benefit(숫자 요약)
     capacity = _pick_num(items, "capacity")
     fee_1p = _pick_num(items, "fee_1p_kkrw")
     fee_2p = _pick_num(items, "fee_2p_kkrw")
@@ -197,7 +176,7 @@ def normalize_dormitory_group(items: List[Dict[str, Any]], seq_idx: int) -> Dict
         ("기숙사비:" + ", ".join(fee_parts)) if fee_parts else "기숙사비:정보없음",
     ])
 
-    # guide_text 라우팅(헤더 기반)
+
     target_lines: List[str] = []
     condition_lines: List[str] = []
     apply_lines: List[str] = []
@@ -220,7 +199,7 @@ def normalize_dormitory_group(items: List[Dict[str, Any]], seq_idx: int) -> Dict
         benefit_lines += routed["benefit"]
         contact_lines += routed["contact"]
 
-    # 최종 텍스트
+ 
     target_text = "\n".join(dedup_texts(target_lines)).strip() if target_lines else None
     condition_text = "\n".join(dedup_texts(condition_lines)).strip() if condition_lines else None
     apply_text = "\n".join(dedup_texts(apply_lines)).strip() if apply_lines else None
@@ -229,7 +208,7 @@ def normalize_dormitory_group(items: List[Dict[str, Any]], seq_idx: int) -> Dict
     extra_benefit = "\n".join(dedup_texts(benefit_lines)).strip() if benefit_lines else None
     benefit_text = numeric_benefit if not extra_benefit else (numeric_benefit + "\n" + extra_benefit)
 
-    # raw_text(검색용)
+
     parts: List[str] = [
         f"제목: {dorm_name}",
         "카테고리: dormitory",
