@@ -1,8 +1,11 @@
 import requests
 import json
 import os
+from dotenv import load_dotenv
 
-API_KEY = "01dea4cf112f940416c0c47b8b30a6da"
+# API KEY 불러오기
+load_dotenv()
+API_KEY = os.getenv("FINLIFE_API_KEY")
 
 BASE_URL = "http://finlife.fss.or.kr/finlifeapi"
 
