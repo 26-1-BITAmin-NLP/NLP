@@ -1,20 +1,41 @@
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, List
 
-# 데이터 최종 스키마 정리
+# eligibility_struct 클래스
+
+@dataclass
+class Regions:
+    sido: List[str] = field(default_factory=list)
+    sigungu: List[str] = field(default_factory=list)
+
+@dataclass
+class EligibilityStruct:
+    age_min: Optional[int] = None
+    age_max: Optional[int] = None
+    income_max_m: Optional[int] = None
+    asset_max_m: Optional[int] = None
+
+    household_types: List[str] = field(default_factory=list)
+    requires_no_house: Optional[bool] = None
+
+    regions: Regions = field(default_factory=Regions)
+    housing_types: List[str] = field(default_factory=list)
+
+
+# 최종 정책 스키마
+
 @dataclass
 class Policy:
     policy_id: str
     category: str
     title: str
-    region: Optional[str]
-    provider: Optional[str]
-    source_url: Optional[str]
 
-    target_text: Optional[str]
-    condition_text: Optional[str]
-    benefit_text: Optional[str]
-    apply_text: Optional[str]
-    contact_text: Optional[str]
+    eligibility_struct: EligibilityStruct
 
-    raw_text: str
+    eligibility_text: Optional[str] = None
+    benefit_text: Optional[str] = None
+    process_text: Optional[str] = None
+
+    provider: Optional[str] = None
+    region: Optional[str] = None
+    source_url: Optional[str] = None

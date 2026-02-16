@@ -1,10 +1,10 @@
 # 카테고리 별 공통 정규화 코드
 from __future__ import annotations
-
 from typing import Any, Dict, List
+import re
+
 # import hashlib
 # import json
-import re
 
 # 해시 함수
 """ def stable_id(prefix: str, payload: Dict[str, Any]) -> str:
@@ -101,3 +101,56 @@ def dedup_texts(texts: List[str]) -> List[str]:
             final.append(t)
 
     return final
+
+# 데이터 구조화 유틸 함수 추가
+
+# 나이 숫자 추출
+def extract_age_range(text: str):
+    if not text:
+        return None, None
+
+    m = re.search(r"(\d+)\s*~\s*(\d+)\s*세", text)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+
+    min_m = re.search(r"(\d+)\s*세\s*이상", text)
+    max_m = re.search(r"(\d+)\s*세\s*이하", text)
+
+    return (
+        int(min_m.group(1)) if min_m else None,
+        int(max_m.group(1)) if max_m else None,
+    )
+
+# 소득 최대값 추출
+def extract_income_max(text: str):
+    if not text:
+        return None
+
+    m = re.search(r"(\d+)\s*만원\s*이하", text)
+    if m:
+        return int(m.group(1))
+
+    return None
+
+# 무주택 여부
+def detect_no_house(text: str):
+    if not text:
+        return None
+    if "무주택" in text:
+        return True
+    return None
+
+# 지역명 추출 (시/도, 시/군구)
+def extract_regions(text: str):
+    if not text:
+        return {"sido": [], "sigungu": []}
+
+    sido_list = []
+    for sido in ["서울", "경기", "부산", "대구", "인천", "광주", "대전", "울산"]:
+        if sido in text:
+            sido_list.append(sido)
+
+    return {
+        "sido": sido_list,
+        "sigungu": []
+    }
