@@ -140,7 +140,7 @@ def detect_no_house(text: str):
         return True
     return None
 
-# 지역명 추출 (시/도, 시/군구)
+# 지역명 추출 (시/도, 시/군/구)
 def extract_regions(text: str):
     if not text:
         return {"sido": [], "sigungu": []}
