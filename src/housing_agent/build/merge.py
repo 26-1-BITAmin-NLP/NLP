@@ -1,5 +1,4 @@
 # 데이터 정규화 코드 병합 후 전처리된 최종 데이터 파일 생성
-
 import json
 from pathlib import Path
 from typing import Any, Dict, List
