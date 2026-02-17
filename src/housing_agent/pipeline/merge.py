@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[3]
 DATA_RAW = ROOT / "data" / "raw"
 DATA_PROCESSED = ROOT / "data" / "processed"
 
-OUT_PATH = DATA_PROCESSED / "policies.json"
+OUT_PATH = DATA_PROCESSED / "policies_v1.json"
 
 FILES = {
     "finance": "금융지원_all.json",
@@ -87,7 +87,7 @@ def main() -> None:
         raise ValueError(f"Found empty text policies: {len(empty_core)} (e.g. {empty_core[0].get('policy_id')})")
 
     save_json(OUT_PATH, normalized)
-    print(f"[OK] saved to: {OUT_PATH} / count={len(normalized)}")
+    print(f"전체 정책 개수 count= {len(normalized)}")
 
     preview_print(normalized, n=5)
 
