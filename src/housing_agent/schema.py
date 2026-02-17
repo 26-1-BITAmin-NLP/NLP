@@ -12,8 +12,8 @@ class Regions:
 class EligibilityStruct:
     age_min: Optional[int] = None
     age_max: Optional[int] = None
-    income_max: Optional[int] = None # 월 소득 상한 (만 단위)
-    asset_max: Optional[int] = None # 자산 상한 (만 단위)
+    income_max_m: Optional[int] = None # 월 소득 상한 (만 단위)
+    asset_max_m: Optional[int] = None # 월 자산 상한 (만 단위)
 
     household_types: List[str] = field(default_factory=list) # 대상 가구 유형 (예: "청년", "신혼", "다자녀", "1인 가구" 등)
     requires_no_house: Optional[bool] = None # 무주택 조건 필요 여부
