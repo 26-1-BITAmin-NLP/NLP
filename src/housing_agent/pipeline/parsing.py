@@ -1,20 +1,38 @@
-# policies_v1 -> policies_v2
-# eligibility_struct 변수 보강 코드
+# 2차 전처리 진행 코드
 
 from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
+
+import sys
 
 ROOT = Path(__file__).resolve().parents[3]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.housing_agent.normalize.common import (
+    dedup_texts,
+    detect_no_house,
+    extract_age_range,
+    extract_income_max,
+    extract_regions,
+)
 
 IN_PATH = ROOT / "data" / "processed" / "policies_v1.json"
 OUT_PATH = ROOT / "data" / "processed" / "policies_v2.json"
+REPORT_PATH = ROOT / "src" / "housing_agent" / "reports" / "secondary_preprocess_report.json"
 
-REPORT_DIR = ROOT / "src" / "housing_agent" / "reports"
-REPORT_PATH = REPORT_DIR / "eligibility_struct_report.json"
+RAW_DIR = ROOT / "data" / "raw"
+RAW_FILES = {
+    "finance": RAW_DIR / "금융지원_all.json",
+    "housing_supply": RAW_DIR / "주택공급_all.json",
+    "housing_cost": RAW_DIR / "주거비_기타지원_all.json",
+    "dormitory": RAW_DIR / "기숙사_all.json",
+}
 
 
 def load_json(path: Path) -> Any:
@@ -28,309 +46,376 @@ def save_json(path: Path, obj: Any) -> None:
         json.dump(obj, f, ensure_ascii=False, indent=2)
 
 
-# 텍스트 정리 유틸 함수
-
-def clean_text(s: str) -> str:
-    if not s:
-        return ""
-    t = str(s)
-    t = t.replace("\u00a0", " ")
-    t = re.sub(r"[,·]", " ", t)
-    t = re.sub(r"\s+", " ", t).strip()
-    return t
-
-def merge_texts(*parts: str) -> str:
-    xs = [p for p in parts if p and str(p).strip()]
-    return "\n".join(xs)
+def split_lines(text: str) -> List[str]:
+    return [ln.strip() for ln in (text or "").split("\n") if ln and ln.strip()]
 
 
-# age 파싱 함수
-
-def _clean_age_text(text: str) -> str:
-    if not text:
-        return ""
-    t = str(text)
-    t = t.replace(",", "")
-    t = re.sub(r"\s+", " ", t).strip()
-    return t
-
-def parse_age_range(text: str) -> Tuple[Optional[int], Optional[int], Optional[str]]:
-
-    t = _clean_age_text(text)
-    if not t:
-        return None, None, None
-
-    # 가장 명확한 범위 우선: 19~34세
-    m = re.search(r"만?\s*(\d{1,2})\s*[~\-]\s*만?\s*(\d{1,2})\s*세", t)
-    if m:
-        a, b = int(m.group(1)), int(m.group(2))
-        lo, hi = (a, b) if a <= b else (b, a)
-        return lo, hi, m.group(0)
-
-    # 단일 조건들을 모두 수집해서 교집합 계산
-    min_age = None
-    max_age = None
-    ev = []
-
-    # 이상/초과
-    for mm in re.finditer(r"만?\s*(\d{1,2})\s*세\s*(이상|초과)", t):
-        base = int(mm.group(1))
-        # 초과(>)면 정수 최소는 +1, 이상(>=)면 그대로
-        cand = base + (1 if mm.group(2) == "초과" else 0)
-        min_age = cand if min_age is None else max(min_age, cand)
-        ev.append(mm.group(0))
-
-    # 이하/미만
-    for mm in re.finditer(r"만?\s*(\d{1,2})\s*세\s*(이하|미만)", t):
-        base = int(mm.group(1))
-
-        cand = base - (1 if mm.group(2) == "미만" else 0)
-        max_age = cand if max_age is None else min(max_age, cand)
-        ev.append(mm.group(0))
-
-    # 불가능한 구간이면 None 처리
-    if min_age is not None and max_age is not None and min_age > max_age:
-        return None, None, "INFEASIBLE: " + " / ".join(ev)
-
-    return min_age, max_age, (" / ".join(ev) if ev else None)
+def dedup_lines(lines: Iterable[str]) -> List[str]:
+    return dedup_texts([x for x in lines if x and x.strip()])
 
 
-# 금액 파싱 함수
-
-def money_to_won(expr: str) -> Optional[int]:
-
-    t = clean_text(expr)
-    if not t:
-        return None
-
-    # 공백 제거하여 단순화
-    compact = t.replace(" ", "")
-
-    total = 0
-
-    # 억 단위
-    m_uk = re.search(r"(\d+(?:\.\d+)?)억", compact)
-    if m_uk:
-        total += int(float(m_uk.group(1)) * 100_000_000)
-
-    # 천만원 단위 (예: 5천만원)
-    m_cheonman = re.search(r"(\d+(?:\.\d+)?)천만원", compact)
-    if m_cheonman:
-        total += int(float(m_cheonman.group(1)) * 10_000_000)
-
-    # 만원 단위 (예: 3700만원, 5000만원, 250만원)
-    m_manwon = re.search(r"(\d+(?:\.\d+)?)만원", compact)
-    if m_manwon:
-        total += int(float(m_manwon.group(1)) * 10_000)
-
-    # 만 원 (띄어쓰기)
-    m_man = re.search(r"(\d+(?:\.\d+)?)만(?:원)?", compact)
-    if m_man and "만원" not in compact:
-        total += int(float(m_man.group(1)) * 10_000)
-
-    # 순수 원 단위 (앞에서 못 잡았을 때)
-    m_won = re.search(r"(\d+(?:\.\d+)?)원", compact)
-    if m_won and total == 0:
-        total = int(float(m_won.group(1)))
-
-    return total if total > 0 else None
+def line_key(line: str) -> str:
+    return re.sub(r"[^0-9A-Za-z가-힣]+", "", (line or "").lower())
 
 
-# income 파싱 함수
-
-def parse_income(text: str) -> Dict[str, Any]:
-
-    t = clean_text(text)
-    ev: List[str] = []
-
-    monthly = None
-    annual = None
-    median_ratio = None
-
-    # 기준중위소득 120%
-    m = re.search(r"기준\s*중위\s*소득\s*(\d+)\s*%", t)
-    if m:
-        median_ratio = int(m.group(1))
-        ev.append(m.group(0))
-
-    # 연소득 ~ 억/천만원/만원
-    m = re.search(r"(연\s*소득|연소득)\s*([0-9\.]+\s*억\s*원?|[0-9\.]+\s*천\s*만원|[0-9\.]+\s*만원)", t)
-    if m:
-        val = money_to_won(m.group(2))
-        if val:
-            annual = val
-            ev.append(m.group(0))
-
-    # 월소득/월평균소득
-    m = re.search(r"(월\s*소득|월소득|월\s*평균\s*소득|월평균소득)\s*([0-9\.]+\s*만원)", t)
-    if m:
-        val = money_to_won(m.group(2))
-        if val:
-            monthly = val
-            ev.append(m.group(0))
-
-    # 애매한 "소득 5000만원 이하" (연/월 표기가 없으면 연으로 추정하되 evidence 남김)
-    if annual is None:
-        m = re.search(r"소득\s*([0-9\.]+\s*억\s*원?|[0-9\.]+\s*천\s*만원|[0-9\.]+\s*만원)", t)
-        if m:
-            val = money_to_won(m.group(1))
-            if val:
-                annual = val
-                ev.append("AMBIGUOUS:" + m.group(0))
-
-    return {
-        "monthly_max_won": monthly,
-        "annual_max_won": annual,
-        "median_ratio_max": median_ratio,
-        "evidence": ev,
-    }
-
-
-# asset 파싱 함수
-
-def parse_asset(text: str) -> Dict[str, Any]:
-
-    t = clean_text(text)
-    ev = None
-    total_max = None
-
-    m = re.search(r"(총\s*자산|자산)\s*([0-9\.]+\s*억\s*원?|[0-9\.]+\s*천\s*만원|[0-9\.]+\s*만원)", t)
-    if m:
-        val = money_to_won(m.group(2))
-        if val:
-            total_max = val
-            ev = m.group(0)
-
-    return {"total_max_won": total_max, "evidence": ev}
-
-
-# 무주택 조건 파싱 함수
-
-def parse_requires_no_house(text: str) -> Tuple[Optional[bool], Optional[str]]:
-
-    t = clean_text(text).replace(" ", "")
-    if not t:
-        return None, None
-
-    # 유주택 허용/무주택 요건 없음
-    if any(k in t for k in ["유주택", "주택보유", "무주택요건없", "무주택제한없", "무주택아님"]):
-        return False, "유주택/무주택요건없음 패턴"
-
-    if "무주택" in t:
-        return True, "무주택 포함"
-
-    return None, None
-
-
-# region 파싱 함수
-
-SIDO = [
-    "서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종",
-    "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주",
+APPLY_KW = [
+    "신청", "접수", "절차", "방법", "제출서류", "모집", "기간", "기한", "방문", "온라인",
+    "문의", "연락처", "상담", "콜센터", "전화", "홈페이지", "이의신청",
 ]
-
-def parse_region(region_field: str, text: str) -> Dict[str, Any]:
-
-    rf = clean_text(region_field)
-    t = clean_text(text)
-    evidence: List[str] = []
-
-    # 전국
-    merged = merge_texts(rf, t)
-    if re.search(r"(전국|전\s*국|전국단위|전국민)", merged):
-        return {
-            "scope": "nationwide",
-            "regions": {"sido": [], "sigungu": []},
-            "evidence": ["전국 패턴"],
-        }
-
-    sido: List[str] = []
-
-    # region_field 기반
-    if rf:
-        for s in SIDO:
-            if s in rf:
-                sido.append(s)
-                evidence.append(f"region_field:{s}")
-
-    # fallback: 접미어 있는 경우
-    if not sido:
-        for s in SIDO:
-            if re.search(rf"{s}(특별시|광역시|특별자치시|특별자치도|도|시)", merged):
-                sido.append(s)
-                evidence.append(f"text_suffix:{s}")
-
-    # 중복 제거
-    uniq = []
-    for x in sido:
-        if x not in uniq:
-            uniq.append(x)
-
-    scope = "local" if uniq else "unknown"
-    return {
-        "scope": scope,
-        "regions": {"sido": uniq, "sigungu": []},
-        "evidence": evidence,
-    }
+ELIGIBILITY_KW = [
+    "지원대상", "대상자", "신청자격", "자격", "요건", "무주택", "소득", "자산", "연령",
+    "세대주", "기준중위소득", "우선순위", "1순위", "2순위", "3순위", "가능한 자", "청년",
+]
+BENEFIT_KW = [
+    "지원내용", "혜택", "지원금", "한도", "금리", "보증금", "임대료", "월세", "지급",
+    "감면", "수용인원", "기숙사비", "서비스 내용", "최대", "만원", "억원",
+]
+PHONE_RE = r"\d{2,4}-\d{3,4}(?:-\d{4})?"
 
 
-# eligibility_struct_v2 생성
+def score_by_keywords(text: str, keywords: List[str]) -> int:
+    t = text or ""
+    return sum(1 for k in keywords if k in t)
 
-def build_struct_v2(policy: Dict[str, Any]) -> Dict[str, Any]:
 
+def line_scores(text: str) -> Tuple[int, int, int]:
+    t = text or ""
+    apply_score = score_by_keywords(t, APPLY_KW)
+    eligibility_score = score_by_keywords(t, ELIGIBILITY_KW)
+    benefit_score = score_by_keywords(t, BENEFIT_KW)
+
+    if re.search(r"(1순위|2순위|3순위|4순위|5순위|우선|기준\s*중위소득|소득기준|무주택|세대주)", t):
+        eligibility_score += 2
+    if re.search(r"만?\s*\d{1,2}\s*세?\s*[~\-∼〜～]\s*만?\s*\d{1,2}\s*세|만?\s*\d{1,2}\s*세\s*(이상|이하|미만|초과)", t):
+        eligibility_score += 2
+    if re.search(r"(만원|억원|금리|한도|보증금|임대료|월세|지원금|지급|감면)", t):
+        benefit_score += 2
+    if re.search(r"(신청|접수|제출|문의|연락처|콜센터|홈페이지|방문|온라인|이의신청)", t):
+        apply_score += 2
+    if re.search(PHONE_RE, t):
+        apply_score += 2
+
+    return apply_score, eligibility_score, benefit_score
+
+
+def bucket_from_title(section_title: str) -> str:
+    t = (section_title or "").strip()
+    if not t:
+        return "unknown"
+
+    apply_score, eligibility_score, benefit_score = line_scores(t)
+
+    if apply_score > max(eligibility_score, benefit_score):
+        return "process"
+    if eligibility_score > max(apply_score, benefit_score):
+        return "eligibility"
+    if benefit_score > max(apply_score, eligibility_score):
+        return "benefit"
+    return "unknown"
+
+
+def bucket_from_line(line: str) -> str:
+    t = (line or "").strip()
+    if not t:
+        return "unknown"
+
+    apply_score, eligibility_score, benefit_score = line_scores(t)
+
+    if apply_score >= max(eligibility_score, benefit_score) and apply_score >= 2:
+        return "process"
+    if eligibility_score >= max(apply_score, benefit_score) and eligibility_score >= 2:
+        return "eligibility"
+    if benefit_score >= max(apply_score, eligibility_score) and benefit_score >= 2:
+        return "benefit"
+    return "unknown"
+
+
+def final_bucket(section_title: str, line: str, fallback: str = "benefit") -> str:
+    by_line = bucket_from_line(line)
+    if by_line != "unknown":
+        return by_line
+
+    by_title = bucket_from_title(section_title)
+    if by_title != "unknown":
+        return by_title
+
+    return fallback
+
+
+def table_to_lines(tb: Dict[str, Any]) -> List[str]:
+    headers = tb.get("headers") or []
+    rows = tb.get("rows") or []
+    out: List[str] = []
+    if headers:
+        out.append(" | ".join([str(x) for x in headers]))
+    for row in rows:
+        out.append(" | ".join([str(x) for x in row]))
+    return out
+
+
+def raw_units_finance(finance_raw: List[Dict[str, Any]]) -> Dict[str, List[Tuple[str, str]]]:
+    out: Dict[str, List[Tuple[str, str]]] = {}
+    for item in finance_raw:
+        pid = item.get("policy_id")
+        units: List[Tuple[str, str]] = []
+        for sec in item.get("sections", []):
+            title = sec.get("section_title") or sec.get("title") or ""
+            current_inline_title = ""
+            for line in (sec.get("texts") or []):
+                if not isinstance(line, str):
+                    continue
+                s = line.strip()
+                if not s:
+                    continue
+
+                # "사업내용" 같은 섹션 내부의 소제목 문맥을 유지
+                if s in {"지원대상", "지원내용", "문의처", "신청방법", "신청절차", "자격요건"}:
+                    current_inline_title = s
+                    units.append((s, s))
+                    continue
+
+                effective_title = current_inline_title or title
+                units.append((effective_title, s))
+        out[pid] = units
+    return out
+
+
+def raw_units_housing_supply(supply_raw: List[Dict[str, Any]]) -> Dict[str, List[Tuple[str, str]]]:
+    out: Dict[str, List[Tuple[str, str]]] = {}
+    fields = [
+        ("지원대상", "target_text"),
+        ("자격요건", "condition_text"),
+        ("지원내용", "benefit_text"),
+        ("신청방법", "apply_text"),
+        ("문의", "contact_text"),
+    ]
+    for idx, item in enumerate(supply_raw, start=1):
+        pid = f"SUP_{idx:03d}"
+        units: List[Tuple[str, str]] = []
+        for title, key in fields:
+            for line in split_lines(item.get(key) or ""):
+                units.append((title, line))
+        out[pid] = units
+    return out
+
+
+def raw_units_housing_cost(cost_raw: List[Dict[str, Any]]) -> Dict[str, List[Tuple[str, str]]]:
+    out: Dict[str, List[Tuple[str, str]]] = {}
+
+    # v1 생성 시 policy_title로 정렬 후 COST_001... 부여됨
+    sorted_items = sorted(cost_raw, key=lambda x: (x.get("policy_title") or "").strip())
+    for idx, item in enumerate(sorted_items, start=1):
+        pid = f"COST_{idx:03d}"
+        units: List[Tuple[str, str]] = []
+        for sec in item.get("sections", []):
+            title = sec.get("section_title") or sec.get("title") or ""
+            for line in (sec.get("texts") or []):
+                if isinstance(line, str) and line.strip():
+                    units.append((title, line.strip()))
+            for tb in (sec.get("tables") or []):
+                for line in table_to_lines(tb):
+                    if line.strip():
+                        units.append((title, line.strip()))
+        out[pid] = units
+    return out
+
+
+def raw_units_dormitory(dorm_raw: List[Dict[str, Any]]) -> Dict[str, List[Tuple[str, str]]]:
+    grouped: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
+    for item in dorm_raw:
+        key = ((item.get("dorm_name") or "").strip(), (item.get("source_url") or "").strip())
+        grouped[key].append(item)
+
+    out: Dict[str, List[Tuple[str, str]]] = {}
+    grouped_items = [grouped[k] for k in sorted(grouped.keys(), key=lambda x: (x[0], x[1]))]
+    for idx, items in enumerate(grouped_items, start=1):
+        pid = f"DORM_{idx:03d}"
+        units: List[Tuple[str, str]] = []
+        for row in items:
+            title = (row.get("guide_section") or "").strip() or "기숙사 안내"
+            for line in split_lines(row.get("guide_text") or ""):
+                units.append((title, line))
+        out[pid] = units
+    return out
+
+
+def build_raw_unit_index() -> Dict[str, List[Tuple[str, str]]]:
+    finance_raw = load_json(RAW_FILES["finance"])
+    supply_raw = load_json(RAW_FILES["housing_supply"])
+    cost_raw = load_json(RAW_FILES["housing_cost"])
+    dorm_raw = load_json(RAW_FILES["dormitory"])
+
+    unit_index: Dict[str, List[Tuple[str, str]]] = {}
+    unit_index.update(raw_units_finance(finance_raw))
+    unit_index.update(raw_units_housing_supply(supply_raw))
+    unit_index.update(raw_units_housing_cost(cost_raw))
+    unit_index.update(raw_units_dormitory(dorm_raw))
+    return unit_index
+
+
+def recompute_eligibility_struct(policy: Dict[str, Any]) -> Dict[str, Any]:
     eligibility_text = policy.get("eligibility_text") or ""
     benefit_text = policy.get("benefit_text") or ""
     process_text = policy.get("process_text") or ""
+    all_text = "\n".join([x for x in [eligibility_text, benefit_text, process_text] if x]).strip()
     region_field = policy.get("region") or ""
-    provider = policy.get("provider") or ""
 
-    all_text = merge_texts(eligibility_text, benefit_text, process_text, region_field, provider)
+    age_min, age_max = extract_age_range(all_text)
+    income_max_m = extract_income_max(all_text)
+    requires_no_house = detect_no_house(all_text)
 
-    min_age, max_age, age_ev = parse_age_range(all_text)
-    income = parse_income(all_text)
-    asset = parse_asset(all_text)
-    no_house, no_house_ev = parse_requires_no_house(all_text)
-    region = parse_region(region_field, all_text)
+    primary_regions = extract_regions(region_field)
+    if primary_regions.get("sido") or primary_regions.get("sigungu"):
+        regions = primary_regions
+    else:
+        # region 필드가 없는 정책은 시/도만 완만하게 추출하고 시군구는 비움(오탐 방지)
+        fallback = extract_regions(all_text)
+        regions = {"sido": fallback.get("sido") or [], "sigungu": []}
 
+    old_struct = policy.get("eligibility_struct") or {}
     return {
-
-        "min_age": min_age,
-        "max_age": max_age,
-
-        "income_monthly_max_won": income["monthly_max_won"],
-        "income_annual_max_won": income["annual_max_won"],
-        "income_median_ratio_max": income["median_ratio_max"],
-
-        "asset_total_max_won": asset["total_max_won"],
-
-        "requires_no_house": no_house,
-
-        "region_scope": region["scope"],
-        "regions": region["regions"],
-
-        # 디버깅용
-        "evidence": {
-            "age": age_ev,
-            "income": income["evidence"],
-            "asset": asset["evidence"],
-            "requires_no_house": no_house_ev,
-            "region": region["evidence"],
-        },
+        "age_min": age_min,
+        "age_max": age_max,
+        "income_max_m": income_max_m,
+        "asset_max_m": old_struct.get("asset_max_m"),
+        "household_types": old_struct.get("household_types") or [],
+        "requires_no_house": requires_no_house,
+        "regions": regions,
+        "housing_types": old_struct.get("housing_types") or [],
     }
 
 
-def main() -> None:
-    policies = load_json(IN_PATH)
+def improve_policy(policy: Dict[str, Any], raw_units: List[Tuple[str, str]]) -> Tuple[Dict[str, Any], Dict[str, int]]:
+    out = dict(policy)
+    buckets = {"eligibility": [], "benefit": [], "process": []}
+    stats = {
+        "moved_benefit_to_process": 0,
+        "moved_benefit_to_eligibility": 0,
+        "moved_process_to_eligibility": 0,
+        "moved_process_to_benefit": 0,
+        "added_from_raw": 0,
+    }
 
-    enriched: List[Dict[str, Any]] = []
-    for p in policies:
-        p2 = dict(p)
+    # 기존 텍스트에서 명확한 오분류만 이동
+    for line in split_lines(policy.get("eligibility_text") or ""):
+        buckets["eligibility"].append(line)
 
-        # 기존 eligibility_struct_v2 추가만
-        p2["eligibility_struct_v2"] = build_struct_v2(p2)
-        enriched.append(p2)
+    for line in split_lines(policy.get("benefit_text") or ""):
+        apply_score, eligibility_score, benefit_score = line_scores(line)
+        if re.search(r"만?\s*\d{1,2}\s*세?\s*[~\-∼〜～]\s*만?\s*\d{1,2}\s*세|만?\s*\d{1,2}\s*세\s*(이상|이하|미만|초과)", line):
+            buckets["eligibility"].append(line)
+            stats["moved_benefit_to_eligibility"] += 1
+        elif re.search(PHONE_RE, line) and benefit_score == 0:
+            buckets["process"].append(line)
+            stats["moved_benefit_to_process"] += 1
+        elif apply_score >= 3 and benefit_score == 0 and eligibility_score <= 1:
+            buckets["process"].append(line)
+            stats["moved_benefit_to_process"] += 1
+        else:
+            buckets["benefit"].append(line)
 
-    save_json(OUT_PATH, enriched)
+    for line in split_lines(policy.get("process_text") or ""):
+        apply_score, eligibility_score, benefit_score = line_scores(line)
+        if eligibility_score >= 3 and apply_score <= 1:
+            buckets["eligibility"].append(line)
+            stats["moved_process_to_eligibility"] += 1
+        elif benefit_score >= 3 and apply_score == 0:
+            buckets["benefit"].append(line)
+            stats["moved_process_to_benefit"] += 1
+        else:
+            buckets["process"].append(line)
+
+    # raw 대비 누락된 문장 보완
+    existing_keys = {line_key(x) for xs in buckets.values() for x in xs if line_key(x)}
+    existing_blob = line_key("\n".join([x for xs in buckets.values() for x in xs]))
+    for sec_title, line in raw_units:
+        key = line_key(line)
+        if not key or len(key) <= 2 or key in existing_keys or key in existing_blob:
+            continue
+
+        bucket = final_bucket(sec_title, line, fallback="benefit")
+        buckets[bucket].append(line)
+        existing_keys.add(key)
+        existing_blob += key
+        stats["added_from_raw"] += 1
+
+    out["eligibility_text"] = "\n".join(dedup_lines(buckets["eligibility"])) or None
+    out["benefit_text"] = "\n".join(dedup_lines(buckets["benefit"])) or None
+    out["process_text"] = "\n".join(dedup_lines(buckets["process"])) or None
+    out["eligibility_struct"] = recompute_eligibility_struct(out)
+
+    return out, stats
+
+
+def empty_field_counts(policies: List[Dict[str, Any]]) -> Dict[str, int]:
+    fields = ["eligibility_text", "benefit_text", "process_text"]
+    return {
+        f"{f}_empty": sum(1 for p in policies if not (p.get(f) or "").strip())
+        for f in fields
+    }
+
+
+""" def main() -> None:
+    policies_v1 = load_json(IN_PATH)
+    raw_unit_index = build_raw_unit_index()
+
+    improved: List[Dict[str, Any]] = []
+    per_policy_report: List[Dict[str, Any]] = []
+
+    total_stats = {
+        "policy_count": len(policies_v1),
+        "raw_mapped_count": 0,
+        "raw_unmapped_count": 0,
+        "moved_benefit_to_process": 0,
+        "moved_benefit_to_eligibility": 0,
+        "moved_process_to_eligibility": 0,
+        "moved_process_to_benefit": 0,
+        "added_from_raw": 0,
+    }
+
+    for p in policies_v1:
+        pid = p.get("policy_id")
+        has_raw_key = pid in raw_unit_index
+        raw_units = raw_unit_index.get(pid) or []
+        if has_raw_key:
+            total_stats["raw_mapped_count"] += 1
+        else:
+            total_stats["raw_unmapped_count"] += 1
+
+        p2, stats = improve_policy(p, raw_units)
+        improved.append(p2)
+
+        for k in (
+            "moved_benefit_to_process",
+            "moved_benefit_to_eligibility",
+            "moved_process_to_eligibility",
+            "moved_process_to_benefit",
+            "added_from_raw",
+        ):
+            total_stats[k] += stats[k]
+
+        per_policy_report.append({
+            "policy_id": pid,
+            "title": p.get("title"),
+            "category": p.get("category"),
+            **stats,
+        })
+
+    save_json(OUT_PATH, improved)
+    report = {
+        "summary": {
+            **total_stats,
+            "before_empty_counts": empty_field_counts(policies_v1),
+            "after_empty_counts": empty_field_counts(improved),
+        },
+        "per_policy": per_policy_report,
+    }
+    save_json(REPORT_PATH, report)
+
+    print(f"saved: {OUT_PATH}")
+    print(f"saved: {REPORT_PATH}")
+    print(f"summary: {report['summary']}")
+
 
 if __name__ == "__main__":
-    main()
+    main() """
