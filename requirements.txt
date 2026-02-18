@@ -7,3 +7,5 @@ sentencepiece>=0.1.99
 tqdm>=4.60
 jupyter>=1.0
 python-dotenv>=1.0
+openai>=1.40.0
+faiss-cpu>=1.8.0
