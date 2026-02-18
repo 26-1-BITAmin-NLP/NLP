@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -32,6 +33,41 @@ DEFAULT_INDEX_LOG_PATH = ROOT / "data" / "vectorstore" / "policies_v2_index_log.
 DEFAULT_MAPPING_PATH = ROOT / "data" / "vectorstore" / "policies_v2_embedding_mapping.jsonl"
 DEFAULT_CHUNK_PATH = ROOT / "data" / "processed" / "policies_v2_chunked.jsonl"
 DEFAULT_METADATA_PATH = ROOT / "data" / "processed" / "policies_v2_metadata.json" # 정책 단위 metadata 결합
+DEFAULT_SECTION_WEIGHTS = "META=0.92,ELIGIBILITY=1.10,BENEFIT=1.03,PROCESS=1.00" # 섹션별 defalut 가중치
+ALL_CATEGORIES = ("finance", "housing_supply", "housing_cost", "dormitory")
+ALL_SECTIONS = ("META", "ELIGIBILITY", "BENEFIT", "PROCESS")
+
+# 질의 의도 추정을 위한 카테고리별 키워드 사전
+CATEGORY_KEYWORDS: Dict[str, List[str]] = {
+    "finance": [
+        "대출", "금리", "융자", "상환", "보증금", "전세자금", "보증료", "이자", "담보", "기금",
+    ],
+    "housing_supply": [
+        "행복주택", "공공임대", "매입임대", "전세임대", "주택공급", "분양", "청약", "입주자모집", "입주",
+    ],
+    "housing_cost": [
+        "월세", "임대료", "주거비", "관리비", "주거급여", "보조금", "임차료", "주거비용",
+    ],
+    "dormitory": [
+        "기숙사", "생활관", "사생", "입사", "퇴사", "호실",
+    ],
+}
+
+# 질의 의도 추정을 위한 섹션별 키워드 사전
+SECTION_KEYWORDS: Dict[str, List[str]] = {
+    "ELIGIBILITY": [
+        "자격", "조건", "대상", "요건", "연령", "나이", "소득", "무주택", "가능", "해당",
+    ],
+    "BENEFIT": [
+        "혜택", "지원금", "금액", "얼마", "한도", "금리", "지원내용", "얼마나", "보조",
+    ],
+    "PROCESS": [
+        "신청", "절차", "방법", "기간", "접수", "서류", "문의", "어떻게", "언제",
+    ],
+    "META": [
+        "출처", "기관", "운영", "정책명", "어느 지역", "어디", "개요",
+    ],
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,6 +86,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--age", type=int, default=-1, help="나이 필터(미사용: -1)")
     parser.add_argument("--region-sido", type=str, default="", help="시/도 필터")
     parser.add_argument("--region-sigungu", type=str, default="", help="시/군/구 필터")
+    parser.add_argument("--disable-section-weight", action="store_true", help="섹션 가중치 랭킹 비활성화")
+    parser.add_argument("--section-weights", type=str, default=DEFAULT_SECTION_WEIGHTS, help="섹션별 가중치")
+    parser.add_argument("--disable-dynamic-section-weight", action="store_true", help="질의 의도 기반 섹션 가중치 비활성화")
+    parser.add_argument("--disable-dynamic-category-weight", action="store_true", help="질의 의도 기반 카테고리 가중치 비활성화")
+    parser.add_argument("--disable-text-dedup", action="store_true", help="텍스트 중복 제거 비활성화")
+    parser.add_argument("--text-dedup-min-len", type=int, default=80, help="텍스트 dedup 최소 길이")
     parser.add_argument("--preview-chars", type=int, default=300, help="본문 미리보기 글자 수")
     parser.add_argument("--json", action="store_true", help="JSON으로 출력")
     return parser.parse_args()
@@ -88,6 +130,126 @@ def embed_query(client: Any, model: str, query: str) -> np.ndarray:
 
 def build_chunk_map(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     return {str(r.get("chunk_id")): r for r in rows if r.get("chunk_id")}
+
+# 섹션별 기본 가중치 파싱
+def parse_section_weights(raw: str) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            raise ValueError(f"section-weights 형식 오류: '{part}'")
+        k, v = part.split("=", 1)
+        key = k.strip().upper()
+        try:
+            val = float(v.strip())
+        except ValueError as exc:
+            raise ValueError(f"section-weights 값 오류: '{part}'") from exc
+        if val <= 0:
+            raise ValueError(f"section-weights는 0보다 커야 합니다: '{part}'")
+        out[key] = val
+    return out
+
+# 섹션별 동적 가중치 추론
+def infer_dynamic_section_weights(query: str) -> tuple[Dict[str, float], Dict[str, int]]:
+    q = (query or "").strip().lower()
+    q_nospace = re.sub(r"\s+", "", q)
+
+    scores: Dict[str, int] = {sec: 0 for sec in ALL_SECTIONS}
+    for sec, keywords in SECTION_KEYWORDS.items():
+        hit = 0
+        for kw in keywords:
+            k = kw.lower()
+            if k in q or k in q_nospace:
+                hit += 1
+        scores[sec] = hit
+
+    max_score = max(scores.values()) if scores else 0
+    if max_score <= 0:
+        return ({sec: 1.0 for sec in ALL_SECTIONS}, scores)
+
+    active = [sec for sec, sc in scores.items() if sc > 0]
+    weights: Dict[str, float] = {}
+    for sec in ALL_SECTIONS:
+        sc = scores.get(sec, 0)
+        if sc <= 0:
+            weights[sec] = 0.97
+            continue
+        ratio = sc / max_score
+        weights[sec] = round(1.05 + (0.08 * ratio), 3)
+
+    if len(active) == 1 and max_score >= 2:
+        main_sec = active[0]
+        for sec in ALL_SECTIONS:
+            if sec != main_sec and scores.get(sec, 0) == 0:
+                weights[sec] = 0.94
+
+    return weights, scores
+
+# 카테고리별 동적 가중치 추론
+def infer_dynamic_category_weights(query: str) -> tuple[Dict[str, float], Dict[str, int]]:
+    q = (query or "").strip().lower()
+    q_nospace = re.sub(r"\s+", "", q)
+
+    scores: Dict[str, int] = {cat: 0 for cat in ALL_CATEGORIES}
+    for cat, keywords in CATEGORY_KEYWORDS.items():
+        hit = 0
+        for kw in keywords:
+            k = kw.lower()
+            if k in q or k in q_nospace:
+                hit += 1
+        scores[cat] = hit
+
+    max_score = max(scores.values()) if scores else 0
+    if max_score <= 0:
+        return ({cat: 1.0 for cat in ALL_CATEGORIES}, scores)
+
+    active = [cat for cat, sc in scores.items() if sc > 0]
+    weights: Dict[str, float] = {}
+    for cat in ALL_CATEGORIES:
+        sc = scores.get(cat, 0)
+        if sc <= 0:
+            weights[cat] = 0.96
+            continue
+        # active category는 1.06~1.14 범위에서 가점
+        ratio = sc / max_score
+        weights[cat] = round(1.06 + (0.08 * ratio), 3)
+
+    # 의도가 한 카테고리에 강하게 쏠리면 비해당 카테고리를 더 감점
+    if len(active) == 1 and max_score >= 2:
+        main_cat = active[0]
+        for cat in ALL_CATEGORIES:
+            if cat != main_cat and scores.get(cat, 0) == 0:
+                weights[cat] = 0.93
+
+    return weights, scores
+
+
+def compute_rank_score(
+    raw_score: float,
+    metric: str,
+    section: str,
+    section_weights: Dict[str, float],
+    category: str,
+    category_weights: Dict[str, float],
+) -> float:
+
+    base = raw_score if metric != "l2" else -raw_score
+    section_weight = section_weights.get((section or "").upper(), 1.0)
+    category_weight = category_weights.get((category or "").lower(), 1.0)
+    return base * section_weight * category_weight
+
+
+# 텍스트 중복 제거용 키 생성 : 공백 제거, 특수문자 제거, 소문자화
+def build_text_key(text: str, min_len: int) -> str:
+    if not text:
+        return ""
+    t = text.strip()
+    if len(t) < min_len:
+        return ""
+    return re.sub(r"[^\w가-힣]+", "", t.lower())
+
 
 # 지역 비교 정규화
 def _region_normalize(value: str) -> str:
@@ -182,6 +344,28 @@ def main() -> None:
     index_log = read_json(args.index_log) if args.index_log.exists() else {}
     query_model = args.query_model or index_log.get("embedding_model") or "text-embedding-3-small"
     metric = index_log.get("metric", "cosine")
+    base_section_weights = (
+        {sec: 1.0 for sec in ALL_SECTIONS}
+        if args.disable_section_weight
+        else parse_section_weights(args.section_weights)
+    )
+    if args.disable_section_weight or args.disable_dynamic_section_weight:
+        dynamic_section_weights = {sec: 1.0 for sec in ALL_SECTIONS}
+        section_intent_scores = {sec: 0 for sec in ALL_SECTIONS}
+    else:
+        dynamic_section_weights, section_intent_scores = infer_dynamic_section_weights(args.query)
+    effective_section_weights: Dict[str, float] = {}
+    for sec in ALL_SECTIONS:
+        effective_section_weights[sec] = round(
+            float(base_section_weights.get(sec, 1.0)) * float(dynamic_section_weights.get(sec, 1.0)),
+            4,
+        )
+
+    if args.disable_dynamic_category_weight:
+        dynamic_category_weights = {cat: 1.0 for cat in ALL_CATEGORIES}
+        category_intent_scores = {cat: 0 for cat in ALL_CATEGORIES}
+    else:
+        dynamic_category_weights, category_intent_scores = infer_dynamic_category_weights(args.query)
 
     index = faiss.read_index(str(args.index))
     mapping_rows = read_jsonl(args.mapping)
@@ -227,6 +411,10 @@ def main() -> None:
 
     # vector_idx를 읽을 수 있는 결과로 복원
     results: List[Dict[str, Any]] = []
+    seen_chunk_ids: Set[str] = set()
+    seen_text_keys: Set[str] = set()
+    dedup_skipped = 0
+
     for score, vidx in zip(distances[0].tolist(), indices[0].tolist()):
         if vidx < 0:
             continue
@@ -235,8 +423,24 @@ def main() -> None:
             continue
         if allowed_policy_ids is not None and str(row.get("policy_id")) not in allowed_policy_ids:
             continue
-        chunk = chunk_map.get(str(row.get("chunk_id")), {})
+        chunk_id = str(row.get("chunk_id"))
+        if chunk_id in seen_chunk_ids:
+            dedup_skipped += 1
+            continue
+
+        chunk = chunk_map.get(chunk_id, {})
         text = str(chunk.get("text", ""))
+        text_key = ""
+        if not args.disable_text_dedup:
+            text_key = build_text_key(text, min_len=max(1, args.text_dedup_min_len))
+            if text_key and text_key in seen_text_keys:
+                dedup_skipped += 1
+                continue
+
+        seen_chunk_ids.add(chunk_id)
+        if text_key:
+            seen_text_keys.add(text_key)
+
         results.append(
             {
                 "score": float(score),
@@ -250,8 +454,21 @@ def main() -> None:
                 "text": text,
             }
         )
-        if len(results) >= args.top_k:
-            break
+
+    # 섹션 가중치 반영 재정렬
+    for r in results:
+        r["rank_score"] = compute_rank_score(
+            raw_score=float(r["score"]),
+            metric=metric,
+            section=str(r.get("section") or ""),
+            section_weights=effective_section_weights,
+            category=str(r.get("category") or ""),
+            category_weights=dynamic_category_weights,
+        )
+        r["section_weight"] = effective_section_weights.get(str(r.get("section") or "").upper(), 1.0)
+        r["category_weight"] = dynamic_category_weights.get(str(r.get("category") or "").lower(), 1.0)
+    results.sort(key=lambda x: float(x["rank_score"]), reverse=True)
+    results = results[: args.top_k]
 
     if args.json:
         print(json.dumps(results, ensure_ascii=False, indent=2))
@@ -260,6 +477,13 @@ def main() -> None:
     print(f"[query] {args.query}")
     # print(f"[model] {query_model}")
     # print(f"[metric] {metric}")
+    if not args.disable_dynamic_section_weight and not args.disable_section_weight:
+        print(f"[section_intent_scores] {section_intent_scores}")
+        print(f"[dynamic_section_weights] {dynamic_section_weights}")
+    print(f"[effective_section_weights] {effective_section_weights}")
+    if not args.disable_dynamic_category_weight:
+        print(f"[category_intent_scores] {category_intent_scores}")
+        print(f"[dynamic_category_weights] {dynamic_category_weights}")
     if allowed_policy_ids is not None:
         print(
             "[filter]"
@@ -268,11 +492,14 @@ def main() -> None:
             f", region(시/군/구)= {region_sigungu or '-'}"
             f", allowed_policies= {len(allowed_policy_ids)}"
         )
+    print(f"[dedup_skipped] {dedup_skipped}")
     print(f"[result_count] {len(results)}")
     for i, r in enumerate(results, start=1):
         print("-" * 80)
         print(
-            f"{i}. score={r['score']:.4f} policy_id={r['policy_id']} "
+            f"{i}. score={r['score']:.4f} rank={r['rank_score']:.4f} "
+            f"sec_w={r['section_weight']:.3f} cat_w={r['category_weight']:.3f} "
+            f"policy_id={r['policy_id']} "
             f"chunk_id={r['chunk_id']} section={r['section']}"
         )
         print(f"정책명: {r['title']}")
