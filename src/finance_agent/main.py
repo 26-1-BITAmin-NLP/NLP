@@ -1,16 +1,14 @@
-from finance_agent.processing import parser, filter
+from finance_agent.processing import parse_all_products, filter
 from finance_agent.printer import print_report
 from finance_agent.llm import generate_report
 
 def main():
 
-    # API 데이터
-    api_data = []
     # 상품 데이터 정리
-    products = parser(api_data)
+    products = parse_all_products()
 
     # 사용자 조건 필터링
-    user_condition = []
+    user_condition = {}
     
     filtered = filter(products, user_condition)
 
