@@ -202,7 +202,7 @@ def raw_units_housing_supply(supply_raw: List[Dict[str, Any]]) -> Dict[str, List
 def raw_units_housing_cost(cost_raw: List[Dict[str, Any]]) -> Dict[str, List[Tuple[str, str]]]:
     out: Dict[str, List[Tuple[str, str]]] = {}
 
-    # v1 생성 시 policy_title로 정렬 후 COST_001... 부여됨
+    # v1 생성 시 policy_title로 정렬 후 policy_id 부여
     sorted_items = sorted(cost_raw, key=lambda x: (x.get("policy_title") or "").strip())
     for idx, item in enumerate(sorted_items, start=1):
         pid = f"COST_{idx:03d}"
@@ -268,7 +268,7 @@ def recompute_eligibility_struct(policy: Dict[str, Any]) -> Dict[str, Any]:
     if primary_regions.get("sido") or primary_regions.get("sigungu"):
         regions = primary_regions
     else:
-        # region 필드가 없는 정책은 시/도만 완만하게 추출하고 시군구는 비움(오탐 방지)
+        # region 필드가 없는 정책은 시/도만 완만하게 추출
         fallback = extract_regions(all_text)
         regions = {"sido": fallback.get("sido") or [], "sigungu": []}
 
