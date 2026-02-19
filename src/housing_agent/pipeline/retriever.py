@@ -1,7 +1,6 @@
-from __future__ import annotations
+# 사용자에게 관련성이 높은 정책 정보를 반환하도록 랭킹, 필터링을 진행하는 코드
 
 """
-
 입력
 - 사용자 질의 문자열
 - FAISS 인덱스
@@ -10,8 +9,9 @@ from __future__ import annotations
 
 출력
 - 유사도 상위 k개 청크 (점수, policy_id, chunk_id, 미리보기 텍스트)
-
 """
+
+from __future__ import annotations
 
 import argparse
 import json
@@ -20,12 +20,11 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-import faiss
-from openai import OpenAI
-
 import numpy as np
 from dotenv import load_dotenv
 
+import faiss
+from openai import OpenAI
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_INDEX_PATH = ROOT / "data" / "vectorstore" / "policies_v2_index.faiss"
@@ -276,6 +275,7 @@ def _policy_passes_filters(
     region_sido: str,
     region_sigungu: str,
 ) -> bool:
+    
     # 정책 단위 나이/지역 필터 적용
     es = (policy_meta or {}).get("eligibility_struct") or {}
 
@@ -322,8 +322,13 @@ def build_allowed_policy_ids(
     return allowed
 
 
-def main() -> None:
-    args = parse_args()
+def run_retrieval(args: argparse.Namespace) -> Dict[str, Any]:
+
+    """
+    - query: 질의 문자열
+    - results: 검색 결과 리스트
+    - debug: 가중치/필터 관련 진단 정보
+    """
 
     load_dotenv()
     api_key = os.getenv(args.api_key_env, "").strip()
@@ -349,10 +354,9 @@ def main() -> None:
         if args.disable_section_weight
         else parse_section_weights(args.section_weights)
     )
-    if args.disable_section_weight or args.disable_dynamic_section_weight:
-        dynamic_section_weights = {sec: 1.0 for sec in ALL_SECTIONS}
-        section_intent_scores = {sec: 0 for sec in ALL_SECTIONS}
-    else:
+    dynamic_section_weights = {sec: 1.0 for sec in ALL_SECTIONS}
+    section_intent_scores = {sec: 0 for sec in ALL_SECTIONS}
+    if not (args.disable_section_weight or args.disable_dynamic_section_weight):
         dynamic_section_weights, section_intent_scores = infer_dynamic_section_weights(args.query)
     effective_section_weights: Dict[str, float] = {}
     for sec in ALL_SECTIONS:
@@ -361,10 +365,9 @@ def main() -> None:
             4,
         )
 
-    if args.disable_dynamic_category_weight:
-        dynamic_category_weights = {cat: 1.0 for cat in ALL_CATEGORIES}
-        category_intent_scores = {cat: 0 for cat in ALL_CATEGORIES}
-    else:
+    dynamic_category_weights = {cat: 1.0 for cat in ALL_CATEGORIES}
+    category_intent_scores = {cat: 0 for cat in ALL_CATEGORIES}
+    if not args.disable_dynamic_category_weight:
         dynamic_category_weights, category_intent_scores = infer_dynamic_category_weights(args.query)
 
     index = faiss.read_index(str(args.index))
@@ -470,30 +473,55 @@ def main() -> None:
     results.sort(key=lambda x: float(x["rank_score"]), reverse=True)
     results = results[: args.top_k]
 
+    debug: Dict[str, Any] = {
+        "query_model": query_model,
+        "metric": metric,
+        "base_section_weights": base_section_weights,
+        "section_intent_scores": section_intent_scores,
+        "dynamic_section_weights": dynamic_section_weights,
+        "effective_section_weights": effective_section_weights,
+        "category_intent_scores": category_intent_scores,
+        "dynamic_category_weights": dynamic_category_weights,
+        "age": age,
+        "region_sido": region_sido,
+        "region_sigungu": region_sigungu,
+        "allowed_policy_ids_count": None if allowed_policy_ids is None else len(allowed_policy_ids),
+        "dedup_skipped": dedup_skipped,
+        "result_count": len(results),
+    }
+    return {"query": args.query, "results": results, "debug": debug}
+
+
+def main() -> None:
+    args = parse_args()
+    payload = run_retrieval(args)
+    results: List[Dict[str, Any]] = payload["results"]
+    debug: Dict[str, Any] = payload["debug"]
+
     if args.json:
         print(json.dumps(results, ensure_ascii=False, indent=2))
         return
 
     print(f"[query] {args.query}")
-    # print(f"[model] {query_model}")
-    # print(f"[metric] {metric}")
+    # print(f"[model] {debug['query_model']}")
+    # print(f"[metric] {debug['metric']}")
     if not args.disable_dynamic_section_weight and not args.disable_section_weight:
-        print(f"[section_intent_scores] {section_intent_scores}")
-        print(f"[dynamic_section_weights] {dynamic_section_weights}")
-    print(f"[effective_section_weights] {effective_section_weights}")
+        print(f"[section_intent_scores] {debug['section_intent_scores']}")
+        print(f"[dynamic_section_weights] {debug['dynamic_section_weights']}")
+    print(f"[effective_section_weights] {debug['effective_section_weights']}")
     if not args.disable_dynamic_category_weight:
-        print(f"[category_intent_scores] {category_intent_scores}")
-        print(f"[dynamic_category_weights] {dynamic_category_weights}")
-    if allowed_policy_ids is not None:
+        print(f"[category_intent_scores] {debug['category_intent_scores']}")
+        print(f"[dynamic_category_weights] {debug['dynamic_category_weights']}")
+    if debug["allowed_policy_ids_count"] is not None:
         print(
             "[filter]"
-            f" age= {age if age is not None else '-'}"
-            f", region(시/도)= {region_sido or '-'}"
-            f", region(시/군/구)= {region_sigungu or '-'}"
-            f", allowed_policies= {len(allowed_policy_ids)}"
+            f" age= {debug['age'] if debug['age'] is not None else '-'}"
+            f", region(시/도)= {debug['region_sido'] or '-'}"
+            f", region(시/군/구)= {debug['region_sigungu'] or '-'}"
+            f", allowed_policies= {debug['allowed_policy_ids_count']}"
         )
-    print(f"[dedup_skipped] {dedup_skipped}")
-    print(f"[result_count] {len(results)}")
+    print(f"[dedup_skipped] {debug['dedup_skipped']}")
+    print(f"[result_count] {debug['result_count']}")
     for i, r in enumerate(results, start=1):
         print("-" * 80)
         print(
