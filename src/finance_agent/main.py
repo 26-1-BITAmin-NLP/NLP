@@ -34,9 +34,9 @@ def main():
     print(f"필터링 완료: 총 {len(filtered)}개의 상품 통과")
 
     # 스코어링, LLM 의견서 생성
-    finance_top3, finance_report = scoring_and_report(filtered, user_conditions)
+    finance_top3, finance_memo = scoring_and_report(filtered, user_conditions)
     print(f"스코어링 및 의견서 생성 완료\n")
-    print(finance_report)
+    print(f"\"finance_memo\":", json.dumps(finance_memo, ensure_ascii=False, indent=2))
 
 if __name__ == "__main__":
     main()

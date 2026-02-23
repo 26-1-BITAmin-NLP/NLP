@@ -1,5 +1,5 @@
 import os
-import re
+import json
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -129,11 +129,12 @@ def scoring_and_report(filtered: list, user_conditions: dict) -> tuple:
     system_prompt = """
     당신은 고객의 생애 주기와 재무 상태를 분석하는 꼼꼼한 전문 금융 어드바이저입니다.
     시스템이 1차 선별한 10개의 금융 상품 중, 사용자의 프로필에 맞춰 우대 혜택을 가장 많이 받을 수 있고 미래 설계에 도움이 되는 '최종 Top 3' 상품을 선정하세요.
-    반드시 각 등수가 하나의 상품을 가지도록 선정하세요.
+    반드시 JSON 형식으로만 출력해야 합니다.
     """
     
     user_prompt = f"""
-    아래의 [사용자 프로필]과 [Top 10 후보 상품]을 분석해주세요.
+    [사용자 요청]
+    주어진 10개의 상품 중 내 상황에 가장 잘 맞는 Top 3 금융 상품과 종합 자산 전략을 추천하세요.
 
     [사용자 프로필]
     {profile_text}
@@ -141,20 +142,37 @@ def scoring_and_report(filtered: list, user_conditions: dict) -> tuple:
     [Top 10 후보 상품]
     {candidates_text}
 
-    출력 형식:
+    [출력 스키마 (JSON)]
+    {{
+    "summary": "string",
+    "recommended_products": [
+        {{
+        "candidate_index": 1,
+        "bank": "string",
+        "name": "string",
+        "why": "string",
+        "benefit": "string",
+        "caution": "string"
+        }}
+    ],
+    "asset_strategy": "string"
+    }}
 
-    <맞춤형 금융 상품 추천 Top 3>
-    1위: [은행명] - [상품명]: 우대 조건 달성 가능성을 근거로 한 추천 이유, 활용 방안
-    2위: [은행명] - [상품명]: 추천 이유, 활용 방안
-    3위: [은행명] - [상품명]: 추천 이유, 활용 방안
-    
-    <종합 의견>
-    사용자의 자산, 소득, 가구 유형, 추천 Top 3 상품 등을 고려한 재무 조언 300자 내외
+    [규칙]
+    - recommended_products는 반드시 3개를 선정하세요.
+    - summary는 3~5문장으로 작성하고, 사용자 조건과 추천 상품 Top3를 반영하세요.
+    - 각 상품의 why/benefit/caution은 각각 3줄 내외로 작성하세요.
+    - 각 상품의 why는 '왜 이 사용자에게 맞는지'를 사용자 프로필 기준으로 명시하세요.
+    - benefit은 기대 혜택(우대 금리, 한도 등)을 구체적으로 작성하세요.
+    - caution은 가입 제한이나 우대조건 미달 시 주의사항을 작성하세요.
+    - asset_strategy는 사용자의 자산, 소득, 목표를 고려한 재무 조언을 300자 내외로 작성하세요.
+    - JSON 외 다른 텍스트 출력은 절대 금지합니다.
     """
 
     # 4. LLM API 호출
     response = client.chat.completions.create(
         model="gpt-4o-mini",
+        response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -162,26 +180,30 @@ def scoring_and_report(filtered: list, user_conditions: dict) -> tuple:
         temperature=0.2,
     )
     
-    full_report = response.choices[0].message.content
+    # 5. LLM 응답 결과 JSON 파싱 및 매핑
+    full_report_text = response.choices[0].message.content
     finance_top3 = []
-    
-    # 5. LLM 응답에서 번호 추출하여 실제 상품 딕셔너리 매핑
+
     try:
-        match = re.search(r"선정번호:\s*(\d+),\s*(\d+),\s*(\d+)", full_report)
-        if match:
-            # 리스트 인덱스는 0부터 시작하므로 추출한 번호에서 1을 빼줌
-            indices = [int(match.group(1))-1, int(match.group(2))-1, int(match.group(3))-1]
-            for idx in indices:
-                if 0 <= idx < len(top10_candidates):
-                    finance_top3.append(top10_candidates[idx])
-    except Exception:
-        pass
+        finance_report = json.loads(full_report_text)
+    except json.JSONDecodeError:
+        finance_report = {
+            "summary": "분석 리포트를 생성하는 중 오류가 발생했습니다.", 
+            "recommended_products": [], 
+            "asset_strategy": ""
+        }
+    
+    # 실제 상품 매핑
+    recommended_list = finance_report.get("recommended_products", [])
+    for item in recommended_list:
+        idx = int(item.get("candidate_index", 1)) - 1
+        if 0 <= idx < len(top10_candidates):
+            finance_top3.append(top10_candidates[idx])
+            
+        item.pop("candidate_index", None)
         
-    # 파싱 실패 시 상위 3개 기본 할당
+    # 파싱 실패 처리
     if len(finance_top3) < 3:
         finance_top3 = top10_candidates[:3]
         
-    # 6. 사용자에게 보여줄 최종 리포트 생성
-    finance_report = re.sub(r"선정번호:.*\n+", "", full_report).strip()
-    
     return finance_top3, finance_report
