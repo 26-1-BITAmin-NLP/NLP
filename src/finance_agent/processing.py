@@ -1,5 +1,6 @@
 import json
 import os
+import re
 
 # =================
 # 상품 데이터 정리
@@ -104,7 +105,6 @@ def parse_rentloan_products(data: dict) -> list:
                 "repay_type": opt["rpay_type_nm"],
                 "loan_lmt": base.get("loan_lmt"),
                 "spcl_cnd": base.get("spcl_cnd"),
-                "etc_note": base.get("etc_note"),
                 "dcls_strt_day": base["dcls_strt_day"]
             })
 
@@ -122,8 +122,8 @@ def save_processed_json(products: list, filename: str):
 def parse_all_products() -> list:
     base_dir = os.path.dirname(__file__)
 
-    raw_dir = os.path.join(base_dir, "api_data", "raw")
-    processed_dir = os.path.join(base_dir, "api_data", "processed")
+    raw_dir = os.path.join(base_dir, "data", "raw")
+    processed_dir = os.path.join(base_dir, "data", "processed")
 
     deposit_data = load_raw_json(os.path.join(raw_dir, "deposit.json"))
     saving_data = load_raw_json(os.path.join(raw_dir, "saving.json"))
@@ -147,7 +147,58 @@ products = parse_all_products()
 # =================
 # 사용자 조건 필터링
 # =================
-def filter(products, user_condition):
+def filter(products: list, user_conditions: dict) -> list:
+    """
+    사용자 입력값을 바탕으로 가입 불가능한 상품(성별, 나이, 주거형태 등)을 필터링
+    """
     filtered = []
+    
+    # 사용자 입력값 추출
+    age = user_conditions.get("age", 25)
+    rent_type = user_conditions.get("rent_type", "상관없음")
+    gender = user_conditions.get("gender", "기타")
+    
+    for prod in products:
+        join_member = prod.get("join_member", "")
+        prod_type = prod.get("type", "")
+        
+        # 1. 주거 형태(월세 희망 시 전세자금대출 pass)
+        if rent_type == "월세" and prod_type == "rentloan":
+            continue
+            
+        # 2. 성별
+        # 상품 가입 대상이 '여성' -> 남성 제외
+        if "여성" in join_member and gender == "남성":
+            continue
+        # 상품 가입 대상이 '남성' -> 여성 제외
+        if "남성" in join_member and gender == "여성":
+            continue
+            
+        # 3. 나이
+        min_age = 0
+        max_age = 999
+        
+        # "만19세~만34세" 같은 범위형 텍스트 추출
+        range_match = re.search(r'(?:만\s*)?(\d+)세\s*~\s*(?:만\s*)?(\d+)세', join_member)
+        if range_match:
+            min_age = int(range_match.group(1))
+            max_age = int(range_match.group(2))
+        else:
+            # "만 17세 이상", "14세이상" 같은 하한선 텍스트 추출
+            min_match = re.search(r'(?:만\s*)?(\d+)세\s*이상', join_member)
+            if min_match:
+                min_age = int(min_match.group(1))
+                
+            # "15세 이하", "만 34세 이하" 같은 상한선 텍스트 추출
+            max_match = re.search(r'(?:만\s*)?(\d+)세\s*이하', join_member)
+            if max_match:
+                max_age = int(max_match.group(1))
 
+        # 파싱된 나이 조건과 사용자의 나이 대조
+        if age < min_age or age > max_age:
+            continue
+
+        # 조건들을 모두 통과한 상품만 추가
+        filtered.append(prod)
+        
     return filtered
