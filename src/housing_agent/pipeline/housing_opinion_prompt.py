@@ -59,6 +59,7 @@ def parse_args() -> argparse.Namespace:
     # ui_sections과 폼 입력 변수 통일
     parser.add_argument("--user-profile-path", type=Path, default=None, help="폼 입력 user_profile json 파일 경로")
     parser.add_argument("--age", type=int, default=-1, help="나이")
+    parser.add_argument("--gender", type=str, default="", help="성별") # 성별 변수 추가
     parser.add_argument("--household-type", type=str, default="", help="가구 유형")
     parser.add_argument("--region-city", type=str, default="", help="거주 희망 시/도")
     parser.add_argument("--region-gu", type=str, default="", help="거주 희망 시/군/구")
@@ -131,6 +132,7 @@ def build_profile(args: argparse.Namespace) -> Dict[str, Any]:
     # CLI 입력값으로 기본 프로필 생성
     profile: Dict[str, Any] = {
         "age": _none_if_neg(args.age),
+        "gender": _none_if_empty(args.gender), # 성별 변수 추가
         "household_type": _none_if_empty(args.household_type),
         "region": {
             "city": _none_if_empty(args.region_city),
