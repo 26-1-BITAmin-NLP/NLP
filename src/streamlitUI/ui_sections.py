@@ -5,11 +5,26 @@ import pandas as pd
 def render_user_form():
     st.subheader("1) 🧑‍💼 사용자 정보 입력")
 
+    # 금융 데이터 기준 은행 리스트로 교체
     BANK_OPTIONS = [
-        "국민은행", "신한은행", "우리은행", "하나은행", "농협은행",
-        "기업은행", "카카오뱅크", "토스뱅크", "케이뱅크",
-        "부산은행", "대구은행", "광주은행", "전북은행", "경남은행",
-        "수협은행", "SC제일은행", "씨티은행",
+        "부산은행",
+        "농협은행주식회사",
+        "경남은행",
+        "중소기업은행",
+        "광주은행",
+        "제주은행",
+        "국민은행",
+        "우리은행",
+        "신한은행",
+        "주식회사 하나은행",
+        "주식회사 케이뱅크",
+        "전북은행",
+        "수협은행",
+        "한국산업은행",
+        "주식회사 카카오뱅크",
+        "한국스탠다드차타드은행",
+        "토스뱅크 주식회사",
+        "아이엠뱅크",
     ]
 
     with st.form("user_form"):
@@ -17,6 +32,10 @@ def render_user_form():
 
         with col1:
             age = st.number_input("나이", min_value=18, max_value=45, value=25, step=1)
+
+            # 성별 추가
+            gender = st.selectbox("성별", ["남성", "여성"], index=0)
+
             household_type = st.selectbox("가구 유형", ["청년(1인가구)", "신혼부부", "기타"], index=0)
             region_city = st.text_input("거주 희망 시/도", value="서울특별시")
 
@@ -48,7 +67,7 @@ def render_user_form():
         banks = st.multiselect(
             "자주 쓰는 은행(필수, 복수 선택 가능)",
             options=BANK_OPTIONS,
-            default=["카카오뱅크"] if "카카오뱅크" in BANK_OPTIONS else [],
+            default=["주식회사 카카오뱅크"] if "주식회사 카카오뱅크" in BANK_OPTIONS else [],
         )
 
         submitted = st.form_submit_button("분석 시작")
@@ -62,6 +81,10 @@ def render_user_form():
 
     return {
         "age": int(age),
+
+        
+        "gender": gender,
+
         "household_type": household_type,
         "region": {"city": region_city.strip(), "gu": region_gu.strip()},
         "monthly_income_m": int(monthly_income),
@@ -81,6 +104,10 @@ def render_user_profile_summary(user_profile: dict):
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("나이", f'{user_profile["age"]}세')
+
+        
+        st.write("성별:", user_profile.get("gender", "-"))
+
         st.write("가구 유형:", user_profile["household_type"])
         st.write("주거 형태:", user_profile["rent_type"])
 
@@ -103,21 +130,56 @@ def render_user_profile_summary(user_profile: dict):
 
         st.write("주거 예산:", f'{user_profile["monthly_housing_budget_m"]}만원')
 
-
 def render_housing_section(housing_memo: dict):
     st.subheader("2) 주거 전략 의견서")
-    st.write(housing_memo["summary"])
 
+    status = housing_memo.get("_status", "ok")
+
+    # summary 출력
+    if status == "error":
+        st.error("주거 정책 연동에 실패했습니다.")
+        st.write(housing_memo.get("summary", ""))
+    else:
+        st.write(housing_memo.get("summary", ""))
+
+    # 추천 정책
     with st.expander("추천 정책 보기", expanded=True):
-        for p in housing_memo["eligible_policies"]:
-            st.markdown(f"**• {p['name']}**")
-            st.markdown(f"- 이유: {p['why']}")
-            st.markdown(f"- 기대효과: {p['benefit']}")
-            st.markdown(f"- 주의: {p['caution']}")
-            st.markdown("---")
+        policies = housing_memo.get("eligible_policies", []) or []
 
-    st.markdown("**전문가 의견(전략)**")
-    st.write(housing_memo["strategy"])
+        if not policies:
+            if status == "error":
+                st.info("현재 정책 추천을 불러올 수 없습니다.")
+            else:
+                st.info("조건에 맞는 정책이 없습니다.")
+        else:
+            for p in policies:
+                st.markdown(f"**• {p.get('name','')}**")
+                st.markdown(f"- 이유: {p.get('why','')}")
+                st.markdown(f"- 기대효과: {p.get('benefit','')}")
+                st.markdown(f"- 주의: {p.get('caution','')}")
+                st.markdown("---")
+
+    # 전략 (있는 경우만)
+    strategy = housing_memo.get("strategy", "")
+    if strategy:
+        st.markdown("**전문가 의견(전략)**")
+        st.write(strategy)
+
+    #  근거
+    evidence = housing_memo.get("evidence", [])
+    if evidence:
+        with st.expander("근거(출처) 보기", expanded=False):
+            for ev in evidence:
+                src = ev.get("source", "")
+                snip = ev.get("snippet", "")
+
+                if isinstance(src, str) and src.startswith("http"):
+                    st.markdown(f"- [출처 링크]({src})")
+                else:
+                    st.write(f"- 출처: {src}")
+
+                if snip:
+                    st.caption(snip)
 
 
 def render_finance_section(finance_memo: dict):
@@ -126,10 +188,19 @@ def render_finance_section(finance_memo: dict):
 
     with st.expander("추천 상품 보기", expanded=True):
         for p in finance_memo["recommended_products"]:
-            st.markdown(f"**• {p['name']}**")
-            st.markdown(f"- 이유: {p['why']}")
-            st.markdown(f"- 기대효과: {p['benefit']}")
-            st.markdown(f"- 리스크: {p['risk']}")
+            st.markdown(f"**• {p.get('name', '-') }**")
+
+            bank = p.get("bank", "")
+            if bank:
+                st.markdown(f"- 은행: {bank}")
+
+            st.markdown(f"- 이유: {p.get('why', '-')}")
+            st.markdown(f"- 기대효과: {p.get('benefit', '-')}")
+
+            #  risk 대신 caution 중심 + 폴백
+            caution_text = p.get("caution") or p.get("risk") or "-(미기재)"
+            st.markdown(f"- 주의: {caution_text}")
+
             st.markdown("---")
 
     st.markdown("**전문가 의견(자산 마련 전략)**")
@@ -266,7 +337,6 @@ def render_roadmap(roadmap: list):
 
         # 카드에는 핵심 2~3개만
         key_actions = actions[:3]
-        remaining = actions[3:]
 
         # 마지막 줄이면 아래 라인을 안 그림
         is_last = (i == len(records) - 1)
@@ -316,3 +386,4 @@ def render_roadmap(roadmap: list):
                 }
             )
         st.dataframe(rows, use_container_width=True, hide_index=True)
+        
