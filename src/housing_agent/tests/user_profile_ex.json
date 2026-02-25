@@ -1,0 +1,19 @@
+{
+  "age": 25,
+  "household_type": "청년(1인가구)",
+  "region": {
+    "city": "서울특별시",
+    "gu": "관악구"
+  },
+  "monthly_income_m": 250,
+  "assets_m": 500,
+  "debt_m": 0,
+  "monthly_housing_budget_m": 60,
+  "rent_type": "월세",
+  "move_timeline": "1~3개월",
+  "risk_pref": "중립",
+  "banks": [
+    "카카오뱅크",
+    "신한은행"
+  ]
+}
