@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 # API KEY 불러오기
 load_dotenv()
-API_KEY = os.getenv("OPEN_API_KEY")
+API_KEY = os.getenv("OPENAI_API_KEY")
 
 # ===========================
 # 상품 스코어링 => Top 10 추출
