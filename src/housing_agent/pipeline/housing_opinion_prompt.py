@@ -59,6 +59,7 @@ def parse_args() -> argparse.Namespace:
     # ui_sections과 폼 입력 변수 통일
     parser.add_argument("--user-profile-path", type=Path, default=None, help="폼 입력 user_profile json 파일 경로")
     parser.add_argument("--age", type=int, default=-1, help="나이")
+    parser.add_argument("--gender", type=str, default="", help="성별") # 성별 변수 추가
     parser.add_argument("--household-type", type=str, default="", help="가구 유형")
     parser.add_argument("--region-city", type=str, default="", help="거주 희망 시/도")
     parser.add_argument("--region-gu", type=str, default="", help="거주 희망 시/군/구")
@@ -131,6 +132,7 @@ def build_profile(args: argparse.Namespace) -> Dict[str, Any]:
     # CLI 입력값으로 기본 프로필 생성
     profile: Dict[str, Any] = {
         "age": _none_if_neg(args.age),
+        "gender": _none_if_empty(args.gender), # 성별 변수 추가
         "household_type": _none_if_empty(args.household_type),
         "region": {
             "city": _none_if_empty(args.region_city),
@@ -331,26 +333,26 @@ def build_default_memo(results: List[Dict[str, Any]], source_map: Dict[str, str]
                 "name": title,
                 "why": "\n".join(
                     [
-                        "- 검색 질의와 유사도가 높아 현재 조건과의 적합성이 높습니다.",
-                        "- 나이/지역/주거형태 등 핵심 조건에서 우선 검토할 가치가 있습니다.",
-                        "- 실제 자격요건 충족 여부를 확인하면 신청 가능성을 빠르게 판단할 수 있습니다.",
-                        "- 동일 목적의 대안 정책과 비교했을 때 초기 검토 우선순위가 높습니다.",
+                        "검색 질의와 유사도가 높아 현재 조건과의 적합성이 높습니다.",
+                        "나이/지역/주거형태 등 핵심 조건에서 우선 검토할 가치가 있습니다.",
+                        "실제 자격요건 충족 여부를 확인하면 신청 가능성을 빠르게 판단할 수 있습니다.",
+                        "동일 목적의 대안 정책과 비교했을 때 초기 검토 우선순위가 높습니다.",
                     ]
                 ),
                 "benefit": "\n".join(
                     [
-                        "- 지원 요건 충족 시 월 주거비 또는 초기 주거비 부담 완화에 도움이 됩니다.",
-                        "- 정책별로 임대료 경감, 보증금/금융지원, 현금성 지원 등 효과를 기대할 수 있습니다.",
-                        "- 단기적으로는 지출 안정화, 중기적으로는 주거 안정성 확보에 기여할 수 있습니다.",
-                        "- 다른 제도와 병행 가능 여부를 확인하면 체감 혜택을 더 키울 수 있습니다.",
+                        "지원 요건 충족 시 월 주거비 또는 초기 주거비 부담 완화에 도움이 됩니다.",
+                        "정책별로 임대료 경감, 보증금/금융지원, 현금성 지원 등 효과를 기대할 수 있습니다.",
+                        "단기적으로는 지출 안정화, 중기적으로는 주거 안정성 확보에 기여할 수 있습니다.",
+                        "다른 제도와 병행 가능 여부를 확인하면 체감 혜택을 더 키울 수 있습니다.",
                     ]
                 ),
                 "caution": "\n".join(
                     [
-                        "- 소득/자산/무주택/연령 등 세부 기준 미충족 시 제외될 수 있습니다.",
-                        "- 모집 공고 시기와 신청 기간이 짧을 수 있어 일정 확인이 필요합니다.",
-                        "- 제출 서류(주민등록, 소득증빙, 가족관계 등) 준비가 지연되면 탈락 위험이 있습니다.",
-                        "- 중복수혜 제한, 지역 제한, 거주요건은 반드시 원문 공고로 재확인해야 합니다.",
+                        "소득/자산/무주택/연령 등 세부 기준 미충족 시 제외될 수 있습니다.",
+                        "모집 공고 시기와 신청 기간이 짧을 수 있어 일정 확인이 필요합니다.",
+                        "제출 서류(주민등록, 소득증빙, 가족관계 등) 준비가 지연되면 탈락 위험이 있습니다.",
+                        "중복수혜 제한, 지역 제한, 거주요건은 반드시 원문 공고로 재확인해야 합니다.",
                     ]
                 ),
             }
@@ -430,7 +432,7 @@ def ensure_min_lines(text: str, min_lines: int = 4) -> str:
 
     lines = [ln.strip(" -\t") for ln in raw.splitlines() if ln.strip()]
     if len(lines) >= min_lines:
-        return "\n".join([f"- {ln}" for ln in lines])
+        return "\n".join(lines)
 
     normalized = raw.replace("?", ". ").replace("!", ". ")
     pieces = [p.strip() for p in normalized.split(".") if p.strip()]
@@ -451,7 +453,7 @@ def ensure_min_lines(text: str, min_lines: int = 4) -> str:
         else:
             out_lines.append("중복수혜 제한과 예외 조건을 사전에 점검해야 누락을 줄일 수 있습니다.")
 
-    return "\n".join([f"- {ln}" for ln in out_lines[:min_lines]])
+    return "\n".join(out_lines[:min_lines])
 
 
 def _extract_policy_id_from_source(source: str) -> str:

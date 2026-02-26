@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import re
+
 
 
 def render_user_form():
@@ -165,21 +167,7 @@ def render_housing_section(housing_memo: dict):
         st.markdown("**전문가 의견(전략)**")
         st.write(strategy)
 
-    #  근거
-    evidence = housing_memo.get("evidence", [])
-    if evidence:
-        with st.expander("근거(출처) 보기", expanded=False):
-            for ev in evidence:
-                src = ev.get("source", "")
-                snip = ev.get("snippet", "")
-
-                if isinstance(src, str) and src.startswith("http"):
-                    st.markdown(f"- [출처 링크]({src})")
-                else:
-                    st.write(f"- 출처: {src}")
-
-                if snip:
-                    st.caption(snip)
+    
 
 
 def render_finance_section(finance_memo: dict):
@@ -207,183 +195,74 @@ def render_finance_section(finance_memo: dict):
     st.write(finance_memo["asset_strategy"])
 
 
-def render_integrated_section(integrated_plan: dict):
-    st.subheader("4) 통합 전략 요약(메인 에이전트)")
-    st.write(integrated_plan["integrated_summary"])
+def _split_markdown_roadmap(md: str):
+    """
+    Markdown에서 '## 4.'로 시작하는 로드맵 섹션을 찾아:
+    - before: 로드맵 이전 텍스트
+    - after: 로드맵 이후 텍스트
+    못 찾으면 roadmap=None
+    """
+    if not md:
+        return "", None, ""
 
-    with st.expander("충돌/중복 및 해결 방안", expanded=True):
-        for item in integrated_plan.get("conflicts_and_resolutions", []):
-            st.markdown(f"**- 이슈:** {item['issue']}")
-            st.markdown(f"**  해결:** {item['resolution']}")
+    # '## 4.' 또는 '## 4 ' 형태 모두 대응
+    pattern = r"(^##\s*4[\.\s].*?$)(.*?)(?=^##\s*\d+[\.\s]|\Z)"
+    m = re.search(pattern, md, flags=re.MULTILINE | re.DOTALL)
+
+    if not m:
+        return md, None, ""
+
+    start = m.start()
+    end = m.end()
+
+    before = md[:start].strip()
+    roadmap = md[start:end].strip()
+    after = md[end:].strip()
+
+    return before, roadmap, after
+
+#4. 통합전략 에이전트
+def render_integrated_section(integrated_plan: dict, final_report_markdown: str = None):
+    st.subheader("4) 통합 전략 요약(메인 에이전트)")
+
+    # 1) Markdown 리포트가 있으면, 그걸 '정본'으로 출력
+    if final_report_markdown:
+        before, roadmap_section, after = _split_markdown_roadmap(final_report_markdown)
+
+        # 로드맵 구간만 접고, 나머지는 그대로 출력
+        if before:
+            st.markdown(before)
+        if roadmap_section:
+            with st.expander("📌 (접기/펼치기) 리포트 원문 로드맵 섹션", expanded=False):
+                st.markdown(roadmap_section)
+        if after:
+            st.markdown(after)
+
+    # 2) Markdown이 없으면 fallback으로 integrated_summary 출력
+    else:
+        st.write(integrated_plan.get("integrated_summary", ""))
+
+    # 3) JSON 구조(충돌/체크리스트)는 보조정보로 유지
+    with st.expander("충돌/중복 및 해결 방안", expanded=False):
+        items = integrated_plan.get("conflicts_and_resolutions", [])
+        if not items:
+            st.info("표시할 항목이 없습니다.")
+        for item in items:
+            st.markdown(f"**- 이슈:** {item.get('issue','')}")
+            st.markdown(f"**  해결:** {item.get('resolution','')}")
+            why = item.get("why_it_matters", "")
+            if why:
+                st.caption(why)
             st.markdown("---")
 
-    with st.expander("신청/준비 체크리스트", expanded=True):
-        for c in integrated_plan.get("checklist", []):
-            st.markdown(f"- {c}")
-
-
-def render_roadmap(roadmap: list):
-    """
-    타임라인 카드 + 진행선(세로 타임라인) UI
-    - 상단: 기간 선택(현재/3/6/12개월)
-    - 본문: 세로 타임라인(점/선) + 카드(핵심 2~3개)
-    - 카드 하단: expander로 전체 액션
-    """
-    st.subheader("5) 시각적 로드맵")
-
-    # ---- 1) 기간 선택
-    # roadmap 데이터에는 "1개월"도 있을 수 있으니 내부 정렬용으로 포함.
-    order_map = {"현재": 0, "1개월": 1, "3개월": 2, "6개월": 3, "12개월": 4}
-
-    allowed_select = ["현재", "3개월", "6개월", "12개월"]
-    selected = st.selectbox("보고 싶은 로드맵 구간 선택", allowed_select, index=0)
-    selected_order = order_map[selected]
-
-    # ---- 2) 정렬/필터
-    df = pd.DataFrame(roadmap).copy()
-    df["order"] = df["time"].map(order_map).fillna(999).astype(int)
-    df = df.sort_values("order")
-    df_show = df[df["order"] <= selected_order].copy()
-
-    # ---- 3) 스타일(CSS) 주입
-    st.markdown(
-        """
-<style>
-/* 전체 타임라인 컨테이너 */
-.timeline-wrap{
-  position: relative;
-  padding-left: 10px;
-  margin-top: 10px;
-}
-
-/* 한 줄(row) */
-.tl-row{
-  display: grid;
-  grid-template-columns: 90px 24px 1fr;
-  column-gap: 12px;
-  align-items: start;
-  margin-bottom: 14px;
-}
-
-/* 왼쪽 시간 라벨 */
-.tl-time{
-  font-weight: 700;
-  font-size: 15px;
-  line-height: 24px;
-  color: #111827;
-  padding-top: 2px;
-}
-
-/* 가운데 점/선 */
-.tl-mid{
-  position: relative;
-  width: 24px;
-  min-height: 40px;
-}
-.tl-dot{
-  position: absolute;
-  top: 6px;
-  left: 7px;
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: #2563EB;
-}
-.tl-line{
-  position: absolute;
-  top: 18px;
-  left: 11px;
-  width: 2px;
-  height: calc(100% + 14px);
-  background: #D1D5DB;
-}
-
-/* 오른쪽 카드 */
-.tl-card{
-  border: 1px solid #E5E7EB;
-  border-radius: 12px;
-  padding: 12px 14px;
-  background: #FFFFFF;
-}
-.tl-card-title{
-  font-weight: 700;
-  margin-bottom: 6px;
-}
-.tl-bullets{
-  margin: 0;
-  padding-left: 18px;
-}
-.tl-bullets li{
-  margin-bottom: 4px;
-  line-height: 1.4;
-}
-.tl-muted{
-  color: #6B7280;
-  font-size: 12px;
-  margin-top: 6px;
-}
-</style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # ---- 4) 렌더링(카드 + 진행선)
-    st.markdown('<div class="timeline-wrap">', unsafe_allow_html=True)
-
-    records = df_show.to_dict(orient="records")
-    for i, step in enumerate(records):
-        t = step.get("time", "")
-        actions = step.get("actions", []) or []
-
-        # 카드에는 핵심 2~3개만
-        key_actions = actions[:3]
-
-        # 마지막 줄이면 아래 라인을 안 그림
-        is_last = (i == len(records) - 1)
-
-        bullets_html = "".join([f"<li>{a}</li>" for a in key_actions]) if key_actions else "<li>-</li>"
-        line_html = "" if is_last else '<div class="tl-line"></div>'
-
-        st.markdown(
-            f"""
-<div class="tl-row">
-  <div class="tl-time">{t}</div>
-  <div class="tl-mid">
-    <div class="tl-dot"></div>
-    {line_html}
-  </div>
-  <div class="tl-card">
-    <div class="tl-card-title">핵심 액션</div>
-    <ul class="tl-bullets">
-      {bullets_html}
-    </ul>
-    <div class="tl-muted">선택 구간({selected}) 기준으로 표시됩니다.</div>
-  </div>
-</div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        # “자세히 보기(펼치기)” - 전체 액션을 expander로
-        # expander는 HTML 내부에 넣기 어렵기 때문에 row 아래에 Streamlit 컴포넌트로 붙인다.
-        with st.expander(f"{t} - 자세히 보기", expanded=False):
-            if not actions:
-                st.write("-")
+    with st.expander("신청/준비 체크리스트", expanded=False):
+        checklist = integrated_plan.get("checklist", [])
+        if not checklist:
+            st.info("표시할 항목이 없습니다.")
+        for c in checklist:
+            # checklist가 dict로 오는 경우도 있으니 안전 처리
+            if isinstance(c, dict):
+                st.markdown(f"- {c.get('item','')} ({c.get('deadline','')})  \n  {c.get('notes','')}")
             else:
-                for a in actions:
-                    st.markdown(f"- {a}")
+                st.markdown(f"- {c}")
 
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # ---- 5)  표 보기 유지
-    with st.expander("표로도 보기", expanded=False):
-        rows = []
-        for step in records:
-            rows.append(
-                {
-                    "기간": step.get("time", ""),
-                    "핵심 액션": "\n".join([f"• {a}" for a in (step.get("actions", []) or [])]),
-                }
-            )
-        st.dataframe(rows, use_container_width=True, hide_index=True)
-        
