@@ -1,5 +1,6 @@
 import os
 import json
+from pathlib import Path
 from typing import Dict, Any, Tuple, List
 
 # Import strategy:
@@ -14,14 +15,14 @@ except ImportError:
 
 
 def _load_products() -> List[dict]:
-    """Load products from finance_agent/data/processed/products.json safely."""
-    base_dir = os.path.dirname(__file__)
-    json_path = os.path.join(base_dir, "data", "processed", "products.json")
+    # Load products from /data/processed/products.json
+    project_root = Path(__file__).resolve().parents[2]
+    json_path = project_root / "data" / "processed" / "products.json"
 
-    if not os.path.exists(json_path):
+    if not json_path.exists():
         raise FileNotFoundError(
             f"products.json not found: {json_path}\n"
-            f"Expected path: src/finance_agent/data/processed/products.json"
+            f"Expected path: data/processed/products.json"
         )
 
     with open(json_path, "r", encoding="utf-8") as f:

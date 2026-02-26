@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from pathlib import Path
 
 # =================
 # 상품 데이터 정리
@@ -118,16 +119,16 @@ def save_processed_json(products: list, filename: str):
         json.dump(products, f, ensure_ascii=False, indent=2)
 
 
-# 상품 리스트 하나로 합쳐서 정리!!
+# 상품 리스트 하나로 합쳐서 정리
 def parse_all_products() -> list:
-    base_dir = os.path.dirname(__file__)
+    # 프로젝트 루트 기준 data 폴더 사용 (실제 위치: /data/raw, /data/processed)
+    project_root = Path(__file__).resolve().parents[2]
+    raw_dir = project_root / "data" / "raw"
+    processed_dir = project_root / "data" / "processed"
 
-    raw_dir = os.path.join(base_dir, "data", "raw")
-    processed_dir = os.path.join(base_dir, "data", "processed")
-
-    deposit_data = load_raw_json(os.path.join(raw_dir, "deposit.json"))
-    saving_data = load_raw_json(os.path.join(raw_dir, "saving.json"))
-    rentloan_data = load_raw_json(os.path.join(raw_dir, "rentloan.json"))
+    deposit_data = load_raw_json(str(raw_dir / "deposit.json"))
+    saving_data = load_raw_json(str(raw_dir / "saving.json"))
+    rentloan_data = load_raw_json(str(raw_dir / "rentloan.json"))
 
     products = []
     products += parse_deposit_products(deposit_data)
@@ -136,7 +137,7 @@ def parse_all_products() -> list:
 
     save_processed_json(
         products,
-        os.path.join(processed_dir, "products.json")
+        str(processed_dir / "products.json")
     )
 
     return products
