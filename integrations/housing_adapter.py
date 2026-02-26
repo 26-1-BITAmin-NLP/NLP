@@ -1,4 +1,3 @@
-# integrations/housing_adapter.py
 from __future__ import annotations
 
 import json
@@ -37,7 +36,7 @@ def run_housing(user_profile: Dict[str, Any]) -> Dict[str, Any]:
             profile_path.write_text(json.dumps(user_profile, ensure_ascii=False), encoding="utf-8")
 
             cmd = [
-                sys.executable,  #  "python" 대신 현재 venv 파이썬을 강제
+                sys.executable,  # "python" 대신 현재 venv 파이썬을 강제
                 "-m",
                 "src.housing_agent.pipeline.housing_opinion_prompt",
                 "--user-profile-path",
@@ -60,14 +59,14 @@ def run_housing(user_profile: Dict[str, Any]) -> Dict[str, Any]:
         hm = {
             "_status": "error",
             "summary": (
-                "⚠️ 현재 주거 정책 검색(인덱스/RAG) 연동에 실패했습니다.\n\n"
+                "현재 주거 정책 검색(인덱스/RAG) 연동에 실패했습니다.\n\n"
                 "아래 항목을 확인 후 다시 시도해주세요:\n"
                 "- 인덱스 파일 경로가 올바른지\n"
                 "- vectorstore 파일이 존재하는지\n"
                 "- 실행 환경(venv)이 동일한지\n\n"
                 "문제가 지속되면 개발자에게 오류 로그를 전달해주세요."
             ),
-            "eligible_policies": [],  #  가짜 추천 없음
+            "eligible_policies": [],  # 가짜 추천 없음
             "strategy": "",
             "evidence": [
                 {"source": "local_error", "snippet": str(e)}

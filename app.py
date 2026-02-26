@@ -26,8 +26,8 @@ from streamlitUI.pdf_report import generate_pdf
 
 st.set_page_config(page_title="청년 미래 설계 에이전트", layout="wide")
 
-st.title("📄 청년 미래 설계 보고서")
-st.caption("주거(정책 RAG) + 금융(API) 의견서를 통합해  PDF 보고서를 생성합니다.")
+st.title("청년 미래 설계 보고서 📄")
+st.caption("주거 + 금융 의견서를 통합해 PDF 보고서를 생성합니다.")
 
 # ---------------------------------
 # session_state 초기화
@@ -60,7 +60,7 @@ if user_profile is not None:
 st.divider()
 
 if st.session_state["user_profile"] is None:
-    st.warning("사용자 정보를 입력하고 '전체 분석 실행'을 눌러주세요.")
+    st.warning("사용자 정보를 입력하고 '분석 시작'을 눌러주세요.")
     st.stop()
 
 render_user_profile_summary(st.session_state["user_profile"])
@@ -70,7 +70,7 @@ st.divider()
 # ---------------------------------
 # 2)  단일 실행 버튼 
 # ---------------------------------
-if st.button("🚀 전체 분석 실행 (주거 + 금융 + 통합)", use_container_width=True):
+if st.button("전체 분석 실행 (주거 + 금융 + 통합)", use_container_width=True):
     with st.spinner("AI가 주거·금융·통합 전략을 생성 중입니다..."):
         result = run_workflow(st.session_state["user_profile"])
 
@@ -115,7 +115,7 @@ st.divider()
 # ---------------------------------
 # 4) PDF 다운로드
 # ---------------------------------
-st.subheader("⬇️ PDF 보고서 출력")
+st.subheader("PDF 보고서 출력")
 
 pdf_disabled = (
     st.session_state["integrated_plan"] is None

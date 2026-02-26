@@ -13,7 +13,6 @@ from finance_agent.main import run_finance
 
 load_dotenv()
 
-
 # -----------------------------
 # LangGraph State 정의
 # -----------------------------
@@ -30,9 +29,8 @@ class AgentState(TypedDict):
     final_report_markdown: str
     steps: Annotated[List[str], operator.add]
 
-
 # -----------------------------
-# Nodes 변경 사항( subprocess 없음, 전부 import 호출)
+# Nodes 변경 사항 (subprocess 없음, 전부 import 호출)
 # -----------------------------
 def housing_node(state: AgentState):
     user_profile = state["user_profile"]
@@ -145,7 +143,6 @@ def orchestrator_node(state: AgentState):
     - 신용점수 관리법, 향후 소득 증가 시 주거 정책 수급 자격 박탈 위험 등 청년이 놓치기 쉬운 리스크를 관리하는 실질적인 팁을 작성
     """)
 
-
     response = llm.invoke(
         prompt.format(
             user_data=json.dumps(u, ensure_ascii=False),
@@ -210,7 +207,6 @@ def orchestrator_node(state: AgentState):
         "steps": ["통합 리포트(Markdown) 생성 완료"],
     }
 
-
 # -----------------------------
 # Graph 구성
 # -----------------------------
@@ -228,7 +224,6 @@ workflow.add_edge("finance", "orchestrator")
 workflow.add_edge("orchestrator", END)
 
 app = workflow.compile()
-
 
 # -----------------------------
 #  단일 호출 엔트리

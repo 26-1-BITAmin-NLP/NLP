@@ -17,7 +17,7 @@ import re
 def _sanitize_text(s: str) -> str:
     """
     ReportLab + 일반 TTF(예: Pretendard)에서 깨지기 쉬운 문자(일부 기호)를 안전 문자로 치환.
-    
+
     """
     replacements = {
         "·": "-",  # middle dot
@@ -32,7 +32,7 @@ def _sanitize_text(s: str) -> str:
 
 def _safe(v: Any) -> str:
     if v is None:
-        return "-(미입력)"
+        return "-"
     return _sanitize_text(str(v))
 
 
@@ -139,11 +139,11 @@ def generate_pdf(
 
     # 0) Title
     story.append(Paragraph(_safe("청년 미래 설계 보고서"), title_style))
-    story.append(Paragraph(_safe("주거(정책 RAG) + 금융(API) 의견서를 통합해 로드맵과 실행 계획을 제공합니다."), body))
+    story.append(Paragraph(_safe("주거 + 금융 의견서를 통합해 로드맵과 실행 계획을 제공합니다."), body))
     story.append(Spacer(1, 12))
 
     # 1) User Profile
-    story.append(Paragraph(_safe("1.  사용자 프로필 및 요구사항"), h_style))
+    story.append(Paragraph(_safe("1. 사용자 프로필 및 요구사항"), h_style))
 
     city = user_profile.get("region", {}).get("city", "")
     gu = user_profile.get("region", {}).get("gu", "")
@@ -166,7 +166,7 @@ def generate_pdf(
     story.append(Spacer(1, 10))
 
     # 2) Housing
-    story.append(Paragraph(_safe("2. 주거 전략 의견(주거 에이전트 의견)"), h_style))
+    story.append(Paragraph(_safe("2. 주거 전략 의견"), h_style))
     if housing_memo is None:
         story.append(Paragraph(_safe("- 주거 의견서가 아직 생성되지 않았습니다."), body))
     else:
@@ -191,7 +191,7 @@ def generate_pdf(
     story.append(Spacer(1, 12))
 
     # 3) Finance
-    story.append(Paragraph(_safe("3.  금융 전략 의견(금융 에이전트 의견)"), h_style))
+    story.append(Paragraph(_safe("3. 금융 전략 의견"), h_style))
     if finance_memo is None:
         story.append(Paragraph(_safe("- 금융 의견서가 아직 생성되지 않았습니다."), body))
     else:
@@ -216,7 +216,7 @@ def generate_pdf(
     story.append(Spacer(1, 12))
 
     # 4) Integrated
-    story.append(Paragraph(_safe("4. 통합 전략 요약(메인 에이전트 의견)"), h_style))
+    story.append(Paragraph(_safe("4. 통합 전략 요약"), h_style))
     if integrated_plan is None:
         story.append(Paragraph(_safe("- 통합 전략이 아직 생성되지 않았습니다."), body))
     else:
@@ -253,10 +253,10 @@ def generate_pdf(
                     deadline = _safe(c.get("deadline", ""))
                     notes = _safe(c.get("notes", ""))
 
-                    line1 = f"- {item}" + (f" ({deadline})" if deadline and deadline != "-(미입력)" else "")
+                    line1 = f"- {item}" + (f" ({deadline})" if deadline and deadline != "-" else "")
                     story.append(Paragraph(_safe(line1), body))
 
-                    if notes and notes != "-(미입력)":
+                    if notes and notes != "-":
                         story.append(Paragraph(_safe(f"&nbsp;&nbsp;{notes}"), body))
 
                     story.append(Spacer(1, 4))
@@ -311,8 +311,6 @@ def generate_pdf(
             story.append(table)
             story.append(Spacer(1, 8))                
     story.append(Spacer(1, 12))
-
-    
 
     doc.build(story)
     pdf_bytes = buffer.getvalue()
